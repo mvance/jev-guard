@@ -339,6 +339,13 @@ test("model and backend: selection via env and config, and CLI commands", async 
   assert.equal(resolveBackend("custom", { JEV_BASE_URL: "http://127.0.0.1:8009", JEV_GUARD_CONFIG: cfgWithCustomKey }).key, undefined);
   assert.equal(resolveBackend("custom", { JEV_BASE_URL: "http://127.0.0.1:8009", JEV_BASE_API_KEY: "env_key", JEV_GUARD_CONFIG: cfgWithCustomKey }).key, "env_key");
 
+  // config-based custom backend and URL source error labeling
+  assert.deepEqual(resolveBackend("custom", { JEV_GUARD_CONFIG: cfgWithCustomKey }), { kind: "custom", key: "saved_key", url: "https://saved.example.com/v1/systemone" });
+  assert.equal(backend({ JEV_GUARD_CONFIG: cfgWithCustomKey }).kind, "custom");
+  const badCustomCfg = join(mkdtempSync(join(tmpdir(), "jev-cfg-")), "config.json");
+  writeFileSync(badCustomCfg, JSON.stringify({ jevBaseUrl: "not-a-url" }));
+  assert.throws(() => resolveBackend("custom", { JEV_GUARD_CONFIG: badCustomCfg }), /jevBaseUrl is not a URL/);
+
   // JEV_BACKEND env overrides default priority
   const envBoth = { JEV_API_KEY: "ts", OPENROUTER_API_KEY: "sk-or-1", JEV_GUARD_CONFIG: missing };
   assert.equal(backend(envBoth).kind, "typesafe");
@@ -395,6 +402,20 @@ test("model and backend: selection via env and config, and CLI commands", async 
   const customConfig = join(home, "custom-config.json");
   runCli(["model", "custom-model"], { JEV_GUARD_CONFIG: customConfig });
   assert.equal(JSON.parse(readFileSync(customConfig, "utf8")).model, "custom-model");
+
+  // JEV_BACKEND uppercase normalization when setting model
+  runCli(["model", "upper-model"], { JEV_BACKEND: "OPENROUTER" });
+  assert.equal(JSON.parse(readFileSync(cfgFile, "utf8")).models?.openrouter, "upper-model");
+
+  // JEV_BASE_URL precedence over config.backend when setting model
+  runCli(["backend", "openrouter"]);
+  runCli(["model", "custom-server-model"], { JEV_BASE_URL: "http://127.0.0.1:8009" });
+  assert.equal(JSON.parse(readFileSync(cfgFile, "utf8")).models?.custom, "custom-server-model");
+
+  // unknown backend prints Model: none without undefined
+  out = runCli(["model"], { JEV_BACKEND: "unknown-provider" });
+  assert.match(out, /Model: none/);
+  assert.doesNotMatch(out, /undefined/);
 
   // ask respects cfg.model and explicit model option
   const seen = [];

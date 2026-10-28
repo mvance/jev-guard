@@ -19,6 +19,8 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 
 export const CONFIG_FILE = join(homedir(), ".jev-guard", "config.json");
+
+/** Returns the path to config.json, honoring the JEV_GUARD_CONFIG environment override if present. */
 export const configFile = (env = process.env) => env.JEV_GUARD_CONFIG ?? CONFIG_FILE;
 
 // Env first (CLIs inherit the shell); then ~/.jev-guard/config.json written by `jev-guard key`, which is what
@@ -26,12 +28,14 @@ export const configFile = (env = process.env) => env.JEV_GUARD_CONFIG ?? CONFIG_
 // JEV_BACKEND (or config.backend) allows explicitly selecting a backend provider.
 // Otherwise JEV_BASE_URL wins: it is an explicit choice of server, and it only ever gets its own JEV_BASE_API_KEY (optional, since
 // a local server usually needs none), never a TypeSafe, OpenRouter or gateway key meant for someone else.
+
+/** Resolves the credentials and endpoint configuration for a specific backend kind. */
 export function resolveBackend(kind, env = process.env) {
   const cfg = readConfig(env);
   const target = String(kind ?? "").toLowerCase();
   if (target === "custom") {
-    if (env.JEV_BASE_URL) return { kind: "custom", key: env.JEV_BASE_API_KEY, url: systemOneUrl(env.JEV_BASE_URL) };
-    if (cfg.jevBaseUrl) return { kind: "custom", key: cfg.jevBaseApiKey, url: systemOneUrl(cfg.jevBaseUrl) };
+    if (env.JEV_BASE_URL) return { kind: "custom", key: env.JEV_BASE_API_KEY, url: systemOneUrl(env.JEV_BASE_URL, "JEV_BASE_URL") };
+    if (cfg.jevBaseUrl) return { kind: "custom", key: cfg.jevBaseApiKey, url: systemOneUrl(cfg.jevBaseUrl, "jevBaseUrl") };
     return null;
   }
   if (target === "typesafe") {
@@ -51,13 +55,14 @@ export function resolveBackend(kind, env = process.env) {
   return null;
 }
 
+/** Determines the active backend by evaluating explicit settings and available credentials. */
 export function backend(env = process.env) {
   if (env.JEV_BACKEND) {
     const resolved = resolveBackend(env.JEV_BACKEND, env);
     if (!resolved) throw new Error(`backend "${env.JEV_BACKEND}" has no credentials or is unknown (JEV_BACKEND)`);
     return resolved;
   }
-  if (env.JEV_BASE_URL) return { kind: "custom", key: env.JEV_BASE_API_KEY, url: systemOneUrl(env.JEV_BASE_URL) };
+  if (env.JEV_BASE_URL) return { kind: "custom", key: env.JEV_BASE_API_KEY, url: systemOneUrl(env.JEV_BASE_URL, "JEV_BASE_URL") };
   const cfg = readConfig(env);
   if (cfg.backend) {
     const resolved = resolveBackend(cfg.backend, env);
@@ -72,19 +77,21 @@ export function backend(env = process.env) {
   if (cfg.aiGatewayApiKey) return { kind: "gateway", key: cfg.aiGatewayApiKey, auth: "api-key" };
   // OPENROUTER_API_KEY is shared with many other tools, so it only applies when no Jev-specific key is configured.
   if (env.OPENROUTER_API_KEY) return { kind: "openrouter", key: env.OPENROUTER_API_KEY };
+  if (cfg.jevBaseUrl) return { kind: "custom", key: cfg.jevBaseApiKey, url: systemOneUrl(cfg.jevBaseUrl, "jevBaseUrl") };
   return null;
 }
 
 /** `<base>/v1/systemone` for a System One server; https only, except plain http to this machine or a private address. */
-export function systemOneUrl(base) {
+export function systemOneUrl(base, source = "JEV_BASE_URL") {
   let u;
-  try { u = new URL(base); } catch { throw new Error(`JEV_BASE_URL is not a URL: ${base}`); }
+  try { u = new URL(base); } catch { throw new Error(`${source} is not a URL: ${base}`); }
   if (u.protocol !== "https:" && !(u.protocol === "http:" && isLocal(u.hostname)))
-    throw new Error(`JEV_BASE_URL must be https, or http on localhost or a private address: ${base}`);
+    throw new Error(`${source} must be https, or http on localhost or a private address: ${base}`);
   u.search = ""; u.hash = "";
   return u.href.replace(/\/+$/, "") + SYSTEMONE_PATH;
 }
 
+/** Reads and parses ~/.jev-guard/config.json (or JEV_GUARD_CONFIG path). Returns empty object on read/parse error. */
 export function readConfig(env = process.env) {
   try { return JSON.parse(readFileSync(configFile(env), "utf8")); } catch { return {}; }
 }

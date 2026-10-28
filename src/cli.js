@@ -103,7 +103,8 @@ switch (cmd) {
         if (targetModel.startsWith("-")) die(`unknown option: ${targetModel}`);
         const cfg = { ...readJson(file) };
         let b; try { b = backend(); } catch {}
-        const selectedKind = process.env.JEV_BACKEND ?? cfg.backend ?? (process.env.JEV_BASE_URL ? "custom" : b?.kind);
+        const rawKind = process.env.JEV_BACKEND ?? (process.env.JEV_BASE_URL ? "custom" : (cfg.backend ?? b?.kind));
+        const selectedKind = rawKind ? String(rawKind).toLowerCase() : undefined;
         if (selectedKind) {
           cfg.models = { ...(cfg.models ?? {}), [selectedKind]: targetModel };
         } else {
@@ -116,13 +117,27 @@ switch (cmd) {
     }
     const cfg = readConfig();
     let b; try { b = backend(); } catch {}
-    const selectedKind = process.env.JEV_BACKEND ?? cfg.backend ?? (process.env.JEV_BASE_URL ? "custom" : b?.kind);
+    const rawKind = process.env.JEV_BACKEND ?? (process.env.JEV_BASE_URL ? "custom" : (cfg.backend ?? b?.kind));
+    const selectedKind = rawKind ? String(rawKind).toLowerCase() : undefined;
     const activeKind = b?.kind ?? selectedKind;
-    const activeModel = process.env.JEV_MODEL ?? (activeKind ? cfg.models?.[activeKind] : null) ?? cfg.model ?? (activeKind ? DEFAULT_MODEL[activeKind] : "none");
-    const source = process.env.JEV_MODEL ? "env JEV_MODEL" : (activeKind && cfg.models?.[activeKind]) ? "config.json (backend-specific)" : cfg.model ? "config.json" : "default";
-    console.log(`Model: ${activeModel} (${source})`);
+    const defaultModel = activeKind ? DEFAULT_MODEL[activeKind] : undefined;
+    const activeModel = process.env.JEV_MODEL
+      ?? (activeKind ? cfg.models?.[activeKind] : null)
+      ?? cfg.model
+      ?? defaultModel
+      ?? "none";
+    const source = process.env.JEV_MODEL
+      ? "env JEV_MODEL"
+      : (activeKind && cfg.models?.[activeKind])
+        ? "config.json (backend-specific)"
+        : cfg.model
+          ? "config.json"
+          : defaultModel
+            ? "default"
+            : "none";
+    console.log(source === "none" ? `Model: ${activeModel}` : `Model: ${activeModel} (${source})`);
     if (b) console.log(`Backend: ${b.kind}`);
-    else if (selectedKind) console.log(`Backend: ${String(selectedKind).toLowerCase()} (no credentials configured)`);
+    else if (selectedKind) console.log(`Backend: ${selectedKind} (no credentials configured)`);
     else console.log("Backend: none (no credentials configured)");
     break;
   }
