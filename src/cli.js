@@ -103,7 +103,7 @@ switch (cmd) {
         if (targetModel.startsWith("-")) die(`unknown option: ${targetModel}`);
         const cfg = { ...readJson(file) };
         let b; try { b = backend(); } catch {}
-        const rawKind = process.env.JEV_BACKEND ?? (process.env.JEV_BASE_URL ? "custom" : (cfg.backend ?? b?.kind));
+        const rawKind = process.env.JEV_BACKEND ?? (process.env.JEV_BASE_URL ? "custom" : (cfg.backend ?? (cfg.jevBaseUrl ? "custom" : b?.kind)));
         const selectedKind = rawKind ? String(rawKind).toLowerCase() : undefined;
         if (selectedKind) {
           cfg.models = { ...(cfg.models ?? {}), [selectedKind]: targetModel };
@@ -117,7 +117,7 @@ switch (cmd) {
     }
     const cfg = readConfig();
     let b; try { b = backend(); } catch {}
-    const rawKind = process.env.JEV_BACKEND ?? (process.env.JEV_BASE_URL ? "custom" : (cfg.backend ?? b?.kind));
+    const rawKind = process.env.JEV_BACKEND ?? (process.env.JEV_BASE_URL ? "custom" : (cfg.backend ?? (cfg.jevBaseUrl ? "custom" : b?.kind)));
     const selectedKind = rawKind ? String(rawKind).toLowerCase() : undefined;
     const activeKind = b?.kind ?? selectedKind;
     const defaultModel = activeKind ? DEFAULT_MODEL[activeKind] : undefined;
@@ -169,10 +169,11 @@ switch (cmd) {
     }
     const cfg = readConfig();
     let b; try { b = backend(); } catch {}
-    const selected = process.env.JEV_BACKEND ?? (process.env.JEV_BASE_URL ? "custom" : cfg.backend);
+    const selected = process.env.JEV_BACKEND ?? (process.env.JEV_BASE_URL ? "custom" : (cfg.backend ?? (cfg.jevBaseUrl ? "custom" : null)));
     const source = process.env.JEV_BACKEND ? "env JEV_BACKEND"
       : process.env.JEV_BASE_URL ? "env JEV_BASE_URL"
       : cfg.backend ? "config.json"
+      : cfg.jevBaseUrl ? "config.json (jevBaseUrl)"
       : "auto-detected";
     if (b) console.log(`Backend: ${b.kind} (${source})`);
     else if (selected) console.log(`Backend: ${String(selected).toLowerCase()} (${source}; no credentials configured)`);

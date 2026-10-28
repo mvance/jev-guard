@@ -346,6 +346,11 @@ test("model and backend: selection via env and config, and CLI commands", async 
   writeFileSync(badCustomCfg, JSON.stringify({ jevBaseUrl: "not-a-url" }));
   assert.throws(() => resolveBackend("custom", { JEV_GUARD_CONFIG: badCustomCfg }), /jevBaseUrl is not a URL/);
 
+  // saved jevBaseUrl takes precedence over saved cloud keys and OPENROUTER_API_KEY
+  const cfgCustomWithKeys = join(mkdtempSync(join(tmpdir(), "jev-cfg-")), "config.json");
+  writeFileSync(cfgCustomWithKeys, JSON.stringify({ jevBaseUrl: "https://local.example.com", jevApiKey: "ts_k", openRouterApiKey: "or_k" }));
+  assert.equal(backend({ JEV_GUARD_CONFIG: cfgCustomWithKeys, OPENROUTER_API_KEY: "env_or" }).kind, "custom");
+
   // JEV_BACKEND env overrides default priority
   const envBoth = { JEV_API_KEY: "ts", OPENROUTER_API_KEY: "sk-or-1", JEV_GUARD_CONFIG: missing };
   assert.equal(backend(envBoth).kind, "typesafe");

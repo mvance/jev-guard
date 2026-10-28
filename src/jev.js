@@ -69,6 +69,7 @@ export function backend(env = process.env) {
     if (!resolved) throw new Error(`backend "${cfg.backend}" has no credentials or is unknown (config.backend)`);
     return resolved;
   }
+  if (cfg.jevBaseUrl) return { kind: "custom", key: cfg.jevBaseApiKey, url: systemOneUrl(cfg.jevBaseUrl, "jevBaseUrl") };
   if (env.JEV_API_KEY) return { kind: "typesafe", key: env.JEV_API_KEY };
   if (env.AI_GATEWAY_API_KEY) return { kind: "gateway", key: env.AI_GATEWAY_API_KEY, auth: "api-key" };
   if (env.VERCEL_OIDC_TOKEN) return { kind: "gateway", key: env.VERCEL_OIDC_TOKEN, auth: "oidc" };  // `vercel env pull`; expires in ~12h
@@ -77,7 +78,6 @@ export function backend(env = process.env) {
   if (cfg.aiGatewayApiKey) return { kind: "gateway", key: cfg.aiGatewayApiKey, auth: "api-key" };
   // OPENROUTER_API_KEY is shared with many other tools, so it only applies when no Jev-specific key is configured.
   if (env.OPENROUTER_API_KEY) return { kind: "openrouter", key: env.OPENROUTER_API_KEY };
-  if (cfg.jevBaseUrl) return { kind: "custom", key: cfg.jevBaseApiKey, url: systemOneUrl(cfg.jevBaseUrl, "jevBaseUrl") };
   return null;
 }
 
