@@ -19,6 +19,9 @@ const USAGE = `jev-guard — prompt-injection and dangerous-action guard for cod
                                           would not expect; cached by content hash, exit 2 if anything is flagged
   jev-guard install <agent>               Register in that agent's user config:
                                           claude | codex | copilot | gemini | agy | cursor | pi | opencode
+  jev-guard model [model_id]              View or set model in ~/.jev-guard/config.json
+                                          (e.g. inception/mercury-decide:free on OpenRouter; --reset to clear)
+  jev-guard backend [name]                View or set preferred backend (typesafe|openrouter|gateway; --reset to clear)
   jev-guard key <api key>                 Save the key to ~/.jev-guard/config.json (0600); vck_… keys are
                                           treated as Vercel AI Gateway keys, sk-or-… keys as OpenRouter,
                                           anything else as TypeSafe (--gateway / --openrouter override)
@@ -83,6 +86,61 @@ switch (cmd) {
     writeFileSync(CONFIG_FILE, JSON.stringify(cfg, null, 2) + "\n", { mode: 0o600 });
     const label = { gateway: "Vercel AI Gateway", openrouter: "OpenRouter", typesafe: "TypeSafe" }[kind];
     console.log(`jev-guard: ${label} key saved to ${CONFIG_FILE}`);
+    break;
+  }
+  case "model": {
+    const { CONFIG_FILE, DEFAULT_MODEL, backend, readConfig } = await import("./jev.js");
+    const targetModel = rest[0];
+    if (targetModel) {
+      const cfg = { ...readConfig() };
+      if (targetModel === "--reset" || targetModel === "default") {
+        delete cfg.model;
+        mkdirSync(dirname(CONFIG_FILE), { recursive: true, mode: 0o700 });
+        writeFileSync(CONFIG_FILE, JSON.stringify(cfg, null, 2) + "\n", { mode: 0o600 });
+        console.log(`jev-guard: model reset to default in ${CONFIG_FILE}`);
+      } else {
+        cfg.model = targetModel;
+        mkdirSync(dirname(CONFIG_FILE), { recursive: true, mode: 0o700 });
+        writeFileSync(CONFIG_FILE, JSON.stringify(cfg, null, 2) + "\n", { mode: 0o600 });
+        console.log(`jev-guard: model set to ${targetModel} in ${CONFIG_FILE}`);
+      }
+      break;
+    }
+    const cfg = readConfig();
+    const b = backend();
+    const activeModel = process.env.JEV_MODEL ?? cfg.model ?? (b ? DEFAULT_MODEL[b.kind] : "none");
+    const source = process.env.JEV_MODEL ? "env JEV_MODEL" : cfg.model ? "config.json" : "default";
+    console.log(`Model: ${activeModel} (${source})`);
+    if (b) console.log(`Backend: ${b.kind}`);
+    else console.log("Backend: none (no credentials configured)");
+    break;
+  }
+  case "backend": {
+    const { CONFIG_FILE, backend, readConfig } = await import("./jev.js");
+    const targetBackend = rest[0];
+    if (targetBackend) {
+      const allowed = ["typesafe", "openrouter", "gateway", "custom"];
+      const cfg = { ...readConfig() };
+      if (targetBackend === "--reset" || targetBackend === "default") {
+        delete cfg.backend;
+        mkdirSync(dirname(CONFIG_FILE), { recursive: true, mode: 0o700 });
+        writeFileSync(CONFIG_FILE, JSON.stringify(cfg, null, 2) + "\n", { mode: 0o600 });
+        console.log(`jev-guard: backend reset to default in ${CONFIG_FILE}`);
+      } else if (!allowed.includes(targetBackend.toLowerCase())) {
+        die(`unknown backend: ${targetBackend} (expected one of: ${allowed.join(", ")})`);
+      } else {
+        cfg.backend = targetBackend.toLowerCase();
+        mkdirSync(dirname(CONFIG_FILE), { recursive: true, mode: 0o700 });
+        writeFileSync(CONFIG_FILE, JSON.stringify(cfg, null, 2) + "\n", { mode: 0o600 });
+        console.log(`jev-guard: backend set to ${targetBackend.toLowerCase()} in ${CONFIG_FILE}`);
+      }
+      break;
+    }
+    const cfg = readConfig();
+    const b = backend();
+    const source = process.env.JEV_BACKEND ? "env JEV_BACKEND" : cfg.backend ? "config.json" : "auto-detected";
+    if (b) console.log(`Backend: ${b.kind} (${source})`);
+    else console.log("Backend: none (no credentials configured)");
     break;
   }
   default:

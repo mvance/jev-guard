@@ -311,6 +311,69 @@ test("key: config file is read when env has no credentials", async () => {
   assert.equal(backend({ JEV_GUARD_CONFIG: join(home, "missing.json") }), null);
 });
 
+test("model and backend: selection via env and config, and CLI commands", async () => {
+  const { execFileSync } = await import("node:child_process");
+  const { mkdtempSync, readFileSync, writeFileSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const { ask, backend, resolveBackend } = await import("../src/jev.js");
+  const home = mkdtempSync(join(tmpdir(), "jev-guard-model-"));
+  const cwd = new URL("..", import.meta.url).pathname;
+
+  // resolveBackend directly
+  assert.deepEqual(resolveBackend("typesafe", { JEV_API_KEY: "ts_k" }), { kind: "typesafe", key: "ts_k" });
+  assert.deepEqual(resolveBackend("openrouter", { OPENROUTER_API_KEY: "or_k" }), { kind: "openrouter", key: "or_k" });
+  assert.deepEqual(resolveBackend("gateway", { AI_GATEWAY_API_KEY: "gw_k" }), { kind: "gateway", key: "gw_k", auth: "api-key" });
+  assert.deepEqual(resolveBackend("custom", { JEV_BASE_URL: "http://127.0.0.1:8009", JEV_BASE_API_KEY: "bk" }), { kind: "custom", key: "bk", url: "http://127.0.0.1:8009/v1/systemone" });
+  assert.equal(resolveBackend("unknown", { JEV_API_KEY: "ts_k" }), null);
+
+  // JEV_BACKEND env overrides default priority
+  const envBoth = { JEV_API_KEY: "ts", OPENROUTER_API_KEY: "sk-or-1" };
+  assert.equal(backend(envBoth).kind, "typesafe");
+  assert.equal(backend({ ...envBoth, JEV_BACKEND: "openrouter" }).kind, "openrouter");
+  assert.equal(backend({ ...envBoth, JEV_BACKEND: "typesafe" }).kind, "typesafe");
+
+  // CLI model and backend commands
+  const runCli = (args) => execFileSync(process.execPath, ["src/cli.js", ...args], { env: { ...process.env, HOME: home }, cwd }).toString("utf8");
+  const cfgFile = join(home, ".jev-guard", "config.json");
+
+  runCli(["model", "inception/mercury-decide:free"]);
+  assert.equal(JSON.parse(readFileSync(cfgFile, "utf8")).model, "inception/mercury-decide:free");
+  let out = runCli(["model"]);
+  assert.match(out, /Model: inception\/mercury-decide:free \(config\.json\)/);
+
+  runCli(["model", "--reset"]);
+  assert.equal(JSON.parse(readFileSync(cfgFile, "utf8")).model, undefined);
+
+  runCli(["backend", "openrouter"]);
+  assert.equal(JSON.parse(readFileSync(cfgFile, "utf8")).backend, "openrouter");
+  out = runCli(["backend"]);
+  assert.match(out, /Backend: openrouter/);
+
+  runCli(["backend", "--reset"]);
+  assert.equal(JSON.parse(readFileSync(cfgFile, "utf8")).backend, undefined);
+
+  // ask respects cfg.model and explicit model option
+  const seen = [];
+  const record = async (url, init) => {
+    seen.push(JSON.parse(init.body));
+    return { ok: true, json: async () => ({ answers: { x: { type: "noul", noul: 0.1 } } }) };
+  };
+  const q = { x: { type: "noul", instructions: "?" } };
+  writeFileSync(cfgFile, JSON.stringify({ openRouterApiKey: "sk-or-1", model: "inception/mercury-decide:free" }));
+
+  await ask("s", q, { env: { JEV_GUARD_CONFIG: cfgFile }, fetchImpl: record });
+  assert.equal(seen[0].model, "inception/mercury-decide:free");
+
+  // env.JEV_MODEL overrides cfg.model
+  await ask("s", q, { env: { JEV_GUARD_CONFIG: cfgFile, JEV_MODEL: "override-model" }, fetchImpl: record });
+  assert.equal(seen[1].model, "override-model");
+
+  // explicit model in options overrides env and config
+  await ask("s", q, { env: { JEV_GUARD_CONFIG: cfgFile, JEV_MODEL: "override-model" }, model: "explicit-model", fetchImpl: record });
+  assert.equal(seen[2].model, "explicit-model");
+});
+
 test("backends: OpenRouter and JEV_BASE_URL use the System One shape; a custom server never gets another provider's key", async () => {
   const { ask, backend, systemOneUrl } = await import("../src/jev.js");
   const q = { x: { type: "noul", instructions: "?" } };
