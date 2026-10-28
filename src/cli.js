@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { randomBytes } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -103,8 +104,7 @@ switch (cmd) {
         if (targetModel.startsWith("-")) die(`unknown option: ${targetModel}`);
         const cfg = { ...readJson(file) };
         let b; try { b = backend(); } catch {}
-        const rawKind = process.env.JEV_BACKEND ?? (process.env.JEV_BASE_URL ? "custom" : (cfg.backend ?? (cfg.jevBaseUrl ? "custom" : b?.kind)));
-        const selectedKind = rawKind ? String(rawKind).toLowerCase() : undefined;
+        const selectedKind = selectedBackendKind(cfg, process.env, b);
         if (selectedKind) {
           cfg.models = { ...(cfg.models ?? {}), [selectedKind]: targetModel };
         } else {
@@ -117,8 +117,7 @@ switch (cmd) {
     }
     const cfg = readConfig();
     let b; try { b = backend(); } catch {}
-    const rawKind = process.env.JEV_BACKEND ?? (process.env.JEV_BASE_URL ? "custom" : (cfg.backend ?? (cfg.jevBaseUrl ? "custom" : b?.kind)));
-    const selectedKind = rawKind ? String(rawKind).toLowerCase() : undefined;
+    const selectedKind = selectedBackendKind(cfg, process.env, b);
     const activeKind = b?.kind ?? selectedKind;
     const defaultModel = activeKind ? DEFAULT_MODEL[activeKind] : undefined;
     const activeModel = process.env.JEV_MODEL
@@ -169,14 +168,14 @@ switch (cmd) {
     }
     const cfg = readConfig();
     let b; try { b = backend(); } catch {}
-    const selected = process.env.JEV_BACKEND ?? (process.env.JEV_BASE_URL ? "custom" : (cfg.backend ?? (cfg.jevBaseUrl ? "custom" : null)));
+    const selected = selectedBackendKind(cfg, process.env);
     const source = process.env.JEV_BACKEND ? "env JEV_BACKEND"
       : process.env.JEV_BASE_URL ? "env JEV_BASE_URL"
       : cfg.backend ? "config.json"
       : cfg.jevBaseUrl ? "config.json (jevBaseUrl)"
       : "auto-detected";
     if (b) console.log(`Backend: ${b.kind} (${source})`);
-    else if (selected) console.log(`Backend: ${String(selected).toLowerCase()} (${source}; no credentials configured)`);
+    else if (selected) console.log(`Backend: ${selected} (${source}; no credentials configured)`);
     else console.log("Backend: none (no credentials configured)");
     break;
   }
@@ -287,9 +286,14 @@ async function keyHint() {
   if (!b) console.log("No API key found yet: run `jev-guard key <key>` (or export JEV_API_KEY / OPENROUTER_API_KEY / AI_GATEWAY_API_KEY, or JEV_BASE_URL for a local server). Until then the guard fails open.");
 }
 
+function selectedBackendKind(cfg = {}, env = process.env, b) {
+  const raw = env.JEV_BACKEND ?? (env.JEV_BASE_URL ? "custom" : (cfg.backend ?? (cfg.jevBaseUrl ? "custom" : b?.kind)));
+  return raw ? String(raw).toLowerCase() : undefined;
+}
+
 function writeConfig(file, obj) {
   mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
-  const tmp = `${file}.tmp.${process.pid}.${Date.now()}`;
+  const tmp = `${file}.tmp.${process.pid}.${Date.now()}.${randomBytes(6).toString("hex")}`;
   writeFileSync(tmp, JSON.stringify(obj, null, 2) + "\n", { mode: 0o600 });
   try { chmodSync(tmp, 0o600); } catch {}
   renameSync(tmp, file);

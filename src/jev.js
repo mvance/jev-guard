@@ -62,14 +62,15 @@ export function backend(env = process.env) {
     if (!resolved) throw new Error(`backend "${env.JEV_BACKEND}" has no credentials or is unknown (JEV_BACKEND)`);
     return resolved;
   }
-  if (env.JEV_BASE_URL) return { kind: "custom", key: env.JEV_BASE_API_KEY, url: systemOneUrl(env.JEV_BASE_URL, "JEV_BASE_URL") };
+  const custom = resolveBackend("custom", env);
+  if (env.JEV_BASE_URL) return custom;
   const cfg = readConfig(env);
   if (cfg.backend) {
     const resolved = resolveBackend(cfg.backend, env);
     if (!resolved) throw new Error(`backend "${cfg.backend}" has no credentials or is unknown (config.backend)`);
     return resolved;
   }
-  if (cfg.jevBaseUrl) return { kind: "custom", key: cfg.jevBaseApiKey, url: systemOneUrl(cfg.jevBaseUrl, "jevBaseUrl") };
+  if (custom) return custom;
   if (env.JEV_API_KEY) return { kind: "typesafe", key: env.JEV_API_KEY };
   if (env.AI_GATEWAY_API_KEY) return { kind: "gateway", key: env.AI_GATEWAY_API_KEY, auth: "api-key" };
   if (env.VERCEL_OIDC_TOKEN) return { kind: "gateway", key: env.VERCEL_OIDC_TOKEN, auth: "oidc" };  // `vercel env pull`; expires in ~12h
