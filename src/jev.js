@@ -5,6 +5,7 @@ const TYPESAFE_URL = "https://api.typesafe.ai/v1/systemone";
 const OPENROUTER_URL = "https://openrouter.ai/api/v1/systemone";   // https://openrouter.ai/docs/guides/community/typesafe-sdk
 const GATEWAY_URL = "https://ai-gateway.vercel.sh/v4/ai/evaluation-model";
 const SYSTEMONE_PATH = "/v1/systemone";
+const ENV_JEV_BASE_URL = "JEV_BASE_URL";
 export const DEFAULT_MODEL = { custom: "jev-latest", typesafe: "jev-latest", openrouter: "jev-1.13", gateway: "typesafe-ai/jev" };
 const LOOPBACK = new Set(["localhost", "[::1]"]);
 // Plain http is fine where the traffic never leaves this machine or the private network: loopback and RFC 1918
@@ -29,12 +30,17 @@ export const configFile = (env = process.env) => env.JEV_GUARD_CONFIG ?? CONFIG_
 // Otherwise JEV_BASE_URL wins: it is an explicit choice of server, and it only ever gets its own JEV_BASE_API_KEY (optional, since
 // a local server usually needs none), never a TypeSafe, OpenRouter or gateway key meant for someone else.
 
-/** Resolves the credentials and endpoint configuration for a specific backend kind. */
+/**
+ * Resolves the credentials and endpoint configuration for a specific backend kind.
+ * @param {string} kind - Backend kind ("custom", "typesafe", "gateway", "openrouter")
+ * @param {NodeJS.ProcessEnv} [env=process.env] - Environment variables object
+ * @returns {{kind: string, key?: string, url?: string, auth?: string}|null} Backend configuration or null
+ */
 export function resolveBackend(kind, env = process.env) {
   const cfg = readConfig(env);
   const target = String(kind ?? "").toLowerCase();
   if (target === "custom") {
-    if (env.JEV_BASE_URL) return { kind: "custom", key: env.JEV_BASE_API_KEY, url: systemOneUrl(env.JEV_BASE_URL, "JEV_BASE_URL") };
+    if (env[ENV_JEV_BASE_URL]) return { kind: "custom", key: env.JEV_BASE_API_KEY, url: systemOneUrl(env[ENV_JEV_BASE_URL], ENV_JEV_BASE_URL) };
     if (cfg.jevBaseUrl) return { kind: "custom", key: cfg.jevBaseApiKey, url: systemOneUrl(cfg.jevBaseUrl, "jevBaseUrl") };
     return null;
   }
@@ -55,7 +61,11 @@ export function resolveBackend(kind, env = process.env) {
   return null;
 }
 
-/** Determines the active backend by evaluating explicit settings and available credentials. */
+/**
+ * Determines the active backend by evaluating explicit settings and available credentials.
+ * @param {NodeJS.ProcessEnv} [env=process.env] - Environment variables object
+ * @returns {{kind: string, key?: string, url?: string, auth?: string}|null} Active backend configuration or null
+ */
 export function backend(env = process.env) {
   if (env.JEV_BACKEND) {
     const resolved = resolveBackend(env.JEV_BACKEND, env);
@@ -63,7 +73,7 @@ export function backend(env = process.env) {
     return resolved;
   }
   const custom = resolveBackend("custom", env);
-  if (env.JEV_BASE_URL) return custom;
+  if (env[ENV_JEV_BASE_URL]) return custom;
   const cfg = readConfig(env);
   if (cfg.backend) {
     const resolved = resolveBackend(cfg.backend, env);
@@ -83,7 +93,7 @@ export function backend(env = process.env) {
 }
 
 /** `<base>/v1/systemone` for a System One server; https only, except plain http to this machine or a private address. */
-export function systemOneUrl(base, source = "JEV_BASE_URL") {
+export function systemOneUrl(base, source = ENV_JEV_BASE_URL) {
   let u;
   try { u = new URL(base); } catch { throw new Error(`${source} is not a URL: ${base}`); }
   if (u.protocol !== "https:" && !(u.protocol === "http:" && isLocal(u.hostname)))
@@ -99,12 +109,29 @@ export function readConfig(env = process.env) {
 
 /** @returns {Promise<Record<string, {p?: number, choice?: string, score?: number, probabilities?: Record<string, number>, confidence?: number}>>} */
 export async function ask(state, questions, { env = process.env, fetchImpl = fetch, signal, timeoutMs, backend: explicitBackend, model: explicitModel } = {}) {
-  if (explicitBackend && (!explicitBackend.kind || !DEFAULT_MODEL[explicitBackend.kind])) {
-    throw new Error(`invalid explicit backend: ${JSON.stringify(explicitBackend)}`);
+  let b;
+  if (explicitBackend !== undefined) {
+    if (typeof explicitBackend !== "object" || explicitBackend === null || Array.isArray(explicitBackend)) {
+      throw new Error(`invalid explicit backend: ${JSON.stringify(explicitBackend)}`);
+    }
+    const kind = explicitBackend.kind;
+    if (typeof kind !== "string" || !DEFAULT_MODEL[kind]) {
+      throw new Error(`invalid explicit backend: ${JSON.stringify(explicitBackend)}`);
+    }
+    if (kind === "custom") {
+      if (!explicitBackend.url || typeof explicitBackend.url !== "string") {
+        throw new Error("custom backend requires a url");
+      }
+      b = { kind: "custom", url: systemOneUrl(explicitBackend.url.replace(/\/v1\/systemone$/, ""), "explicitBackend.url"), key: explicitBackend.key };
+    } else if (kind === "gateway") {
+      b = { kind: "gateway", key: explicitBackend.key, auth: explicitBackend.auth === "oidc" ? "oidc" : "api-key" };
+    } else {
+      b = { kind, key: explicitBackend.key };
+    }
+  } else {
+    b = backend(env);
   }
-  const b = explicitBackend ?? backend(env);
   if (!b) throw new Error("no credentials: run `jev-guard key <key>` or set JEV_API_KEY / OPENROUTER_API_KEY / AI_GATEWAY_API_KEY / JEV_BASE_URL");
-  if (b.kind === "custom" && !b.url) throw new Error("custom backend requires a url");
   const gw = b.kind === "gateway";
   const q = gw ? mapValues(questions, (x) => (x.type === "noul" ? { ...x, type: "boolean" } : x)) : questions;
   // One budget for the whole call, retries included: every host kills a hook at ~30 s, and a hook that dies

@@ -102,7 +102,7 @@ switch (cmd) {
         console.log(`jev-guard: model reset to default in ${file}`);
       } else {
         if (targetModel.startsWith("-")) die(`unknown option: ${targetModel}`);
-        if (!/^[-_a-zA-Z0-9:/.]+$/.test(targetModel) || targetModel.includes("//") || targetModel.includes("..")) {
+        if (!/^[a-zA-Z0-9_.-]+(\/[a-zA-Z0-9_.-]+)*(:[a-zA-Z0-9_.-]+)?$/.test(targetModel) || targetModel.includes("..")) {
           die(`invalid model ID: ${targetModel}`);
         }
         const cfg = { ...readJson(file) };
@@ -284,7 +284,12 @@ function install(target) {
 }
 
 function safeBackend(backendFn, env = process.env) {
-  try { return backendFn(env); } catch { return null; }
+  try {
+    return backendFn(env);
+  } catch (err) {
+    if (process.env.DEBUG) console.warn(`jev-guard: backend resolution failed: ${err.message}`);
+    return null;
+  }
 }
 
 async function keyHint() {
@@ -322,9 +327,17 @@ function writeConfig(file, obj) {
   const tmp = `${target}.tmp.${randomBytes(16).toString("hex")}`;
   try {
     writeFileSync(tmp, JSON.stringify(obj, null, 2) + "\n", { mode: 0o600 });
-    try { chmodSync(tmp, 0o600); } catch {}
+    try {
+      chmodSync(tmp, 0o600);
+    } catch (err) {
+      if (err.code !== "ENOSYS" && err.code !== "EPERM") console.warn(`jev-guard: failed to set permissions on ${tmp}: ${err.message}`);
+    }
     renameSync(tmp, target);
-    try { chmodSync(target, 0o600); } catch {}
+    try {
+      chmodSync(target, 0o600);
+    } catch (err) {
+      if (err.code !== "ENOSYS" && err.code !== "EPERM") console.warn(`jev-guard: failed to set permissions on ${target}: ${err.message}`);
+    }
   } catch (err) {
     try { unlinkSync(tmp); } catch {}
     throw err;
