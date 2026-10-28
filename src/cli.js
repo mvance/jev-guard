@@ -102,8 +102,9 @@ switch (cmd) {
         console.log(`jev-guard: model reset to default in ${file}`);
       } else {
         if (targetModel.startsWith("-")) die(`unknown option: ${targetModel}`);
+        if (!/^[-_a-zA-Z0-9:/.]+$/.test(targetModel)) die(`invalid model ID: ${targetModel}`);
         const cfg = { ...readJson(file) };
-        let b; try { b = backend(); } catch {}
+        const b = safeBackend(backend);
         const selectedKind = selectedBackendKind(cfg, process.env, b);
         if (selectedKind) {
           cfg.models = { ...(cfg.models ?? {}), [selectedKind]: targetModel };
@@ -116,7 +117,7 @@ switch (cmd) {
       break;
     }
     const cfg = readConfig();
-    let b; try { b = backend(); } catch {}
+    const b = safeBackend(backend);
     const selectedKind = selectedBackendKind(cfg, process.env, b);
     const activeKind = b?.kind ?? selectedKind;
     const defaultModel = activeKind ? DEFAULT_MODEL[activeKind] : undefined;
@@ -167,7 +168,7 @@ switch (cmd) {
       break;
     }
     const cfg = readConfig();
-    let b; try { b = backend(); } catch {}
+    const b = safeBackend(backend);
     const selected = selectedBackendKind(cfg, process.env);
     const source = process.env.JEV_BACKEND ? "env JEV_BACKEND"
       : process.env.JEV_BASE_URL ? "env JEV_BASE_URL"
@@ -280,9 +281,13 @@ function install(target) {
   keyHint();
 }
 
+function safeBackend(backendFn, env = process.env) {
+  try { return backendFn(env); } catch { return null; }
+}
+
 async function keyHint() {
   const { backend } = await import("./jev.js");
-  let b; try { b = backend(); } catch {}
+  const b = safeBackend(backend);
   if (!b) console.log("No API key found yet: run `jev-guard key <key>` (or export JEV_API_KEY / OPENROUTER_API_KEY / AI_GATEWAY_API_KEY, or JEV_BASE_URL for a local server). Until then the guard fails open.");
 }
 
@@ -306,7 +311,7 @@ function selectedBackendKind(cfg = {}, env = process.env, b) {
  */
 function writeConfig(file, obj) {
   mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
-  const tmp = `${file}.tmp.${process.pid}.${Date.now()}.${randomBytes(6).toString("hex")}`;
+  const tmp = `${file}.tmp.${randomBytes(16).toString("hex")}`;
   try {
     writeFileSync(tmp, JSON.stringify(obj, null, 2) + "\n", { mode: 0o600 });
     try { chmodSync(tmp, 0o600); } catch {}

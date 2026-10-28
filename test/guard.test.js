@@ -422,6 +422,9 @@ test("model and backend: selection via env and config, and CLI commands", async 
   assert.match(out, /Model: none/);
   assert.doesNotMatch(out, /undefined/);
 
+  // invalid model ID is rejected
+  assert.throws(() => runCli(["model", "bad model ID with spaces"]), /invalid model ID/);
+
   // ask respects cfg.model and explicit model option
   const seen = [];
   const record = async (url, init) => {
