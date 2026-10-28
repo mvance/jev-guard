@@ -464,6 +464,7 @@ test("model and backend: selection via env and config, and CLI commands", async 
   // invalid explicitBackend in ask() throws
   await assert.rejects(() => ask("s", q, { backend: { kind: "nonexistent" }, fetchImpl: record }), /invalid explicit backend/);
   await assert.rejects(() => ask("s", q, { backend: { kind: "custom" }, fetchImpl: record }), /custom backend requires a url/);
+  await assert.rejects(() => ask("s", q, { backend: { kind: "typesafe", key: 12345 }, fetchImpl: record }), /invalid explicit backend: key must be a string/);
 });
 
 test("backends: OpenRouter and JEV_BASE_URL use the System One shape; a custom server never gets another provider's key", async () => {

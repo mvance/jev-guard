@@ -6,6 +6,12 @@ const OPENROUTER_URL = "https://openrouter.ai/api/v1/systemone";   // https://op
 const GATEWAY_URL = "https://ai-gateway.vercel.sh/v4/ai/evaluation-model";
 const SYSTEMONE_PATH = "/v1/systemone";
 const ENV_JEV_BASE_URL = "JEV_BASE_URL";
+const ENV_JEV_BASE_API_KEY = "JEV_BASE_API_KEY";
+const ENV_JEV_API_KEY = "JEV_API_KEY";
+const ENV_OPENROUTER_API_KEY = "OPENROUTER_API_KEY";
+const ENV_AI_GATEWAY_API_KEY = "AI_GATEWAY_API_KEY";
+const ENV_VERCEL_OIDC_TOKEN = "VERCEL_OIDC_TOKEN";
+const ENV_JEV_BACKEND = "JEV_BACKEND";
 export const DEFAULT_MODEL = { custom: "jev-latest", typesafe: "jev-latest", openrouter: "jev-1.13", gateway: "typesafe-ai/jev" };
 const LOOPBACK = new Set(["localhost", "[::1]"]);
 // Plain http is fine where the traffic never leaves this machine or the private network: loopback and RFC 1918
@@ -40,22 +46,22 @@ export function resolveBackend(kind, env = process.env) {
   const cfg = readConfig(env);
   const target = String(kind ?? "").toLowerCase();
   if (target === "custom") {
-    if (env[ENV_JEV_BASE_URL]) return { kind: "custom", key: env.JEV_BASE_API_KEY, url: systemOneUrl(env[ENV_JEV_BASE_URL], ENV_JEV_BASE_URL) };
-    if (cfg.jevBaseUrl) return { kind: "custom", key: cfg.jevBaseApiKey, url: systemOneUrl(cfg.jevBaseUrl, "jevBaseUrl") };
+    if (env[ENV_JEV_BASE_URL]) return { kind: "custom", key: env[ENV_JEV_BASE_API_KEY], url: systemOneUrl(env[ENV_JEV_BASE_URL], ENV_JEV_BASE_URL) };
+    if (cfg.jevBaseUrl) return { kind: "custom", key: cfg.jevBaseApiKey, url: systemOneUrl(cfg.jevBaseUrl, "config.jevBaseUrl") };
     return null;
   }
   if (target === "typesafe") {
-    const key = env.JEV_API_KEY ?? cfg.jevApiKey;
+    const key = env[ENV_JEV_API_KEY] ?? cfg.jevApiKey;
     return key ? { kind: "typesafe", key } : null;
   }
   if (target === "gateway") {
-    if (env.AI_GATEWAY_API_KEY) return { kind: "gateway", key: env.AI_GATEWAY_API_KEY, auth: "api-key" };
-    if (env.VERCEL_OIDC_TOKEN) return { kind: "gateway", key: env.VERCEL_OIDC_TOKEN, auth: "oidc" };
+    if (env[ENV_AI_GATEWAY_API_KEY]) return { kind: "gateway", key: env[ENV_AI_GATEWAY_API_KEY], auth: "api-key" };
+    if (env[ENV_VERCEL_OIDC_TOKEN]) return { kind: "gateway", key: env[ENV_VERCEL_OIDC_TOKEN], auth: "oidc" };
     if (cfg.aiGatewayApiKey) return { kind: "gateway", key: cfg.aiGatewayApiKey, auth: "api-key" };
     return null;
   }
   if (target === "openrouter") {
-    const key = cfg.openRouterApiKey ?? env.OPENROUTER_API_KEY;
+    const key = cfg.openRouterApiKey ?? env[ENV_OPENROUTER_API_KEY];
     return key ? { kind: "openrouter", key } : null;
   }
   return null;
@@ -67,9 +73,9 @@ export function resolveBackend(kind, env = process.env) {
  * @returns {{kind: string, key?: string, url?: string, auth?: string}|null} Active backend configuration or null
  */
 export function backend(env = process.env) {
-  if (env.JEV_BACKEND) {
-    const resolved = resolveBackend(env.JEV_BACKEND, env);
-    if (!resolved) throw new Error(`backend "${env.JEV_BACKEND}" has no credentials or is unknown (JEV_BACKEND)`);
+  if (env[ENV_JEV_BACKEND]) {
+    const resolved = resolveBackend(env[ENV_JEV_BACKEND], env);
+    if (!resolved) throw new Error(`backend "${env[ENV_JEV_BACKEND]}" has no credentials or is unknown (JEV_BACKEND)`);
     return resolved;
   }
   const custom = resolveBackend("custom", env);
@@ -81,14 +87,14 @@ export function backend(env = process.env) {
     return resolved;
   }
   if (custom) return custom;
-  if (env.JEV_API_KEY) return { kind: "typesafe", key: env.JEV_API_KEY };
-  if (env.AI_GATEWAY_API_KEY) return { kind: "gateway", key: env.AI_GATEWAY_API_KEY, auth: "api-key" };
-  if (env.VERCEL_OIDC_TOKEN) return { kind: "gateway", key: env.VERCEL_OIDC_TOKEN, auth: "oidc" };  // `vercel env pull`; expires in ~12h
+  if (env[ENV_JEV_API_KEY]) return { kind: "typesafe", key: env[ENV_JEV_API_KEY] };
+  if (env[ENV_AI_GATEWAY_API_KEY]) return { kind: "gateway", key: env[ENV_AI_GATEWAY_API_KEY], auth: "api-key" };
+  if (env[ENV_VERCEL_OIDC_TOKEN]) return { kind: "gateway", key: env[ENV_VERCEL_OIDC_TOKEN], auth: "oidc" };  // `vercel env pull`; expires in ~12h
   if (cfg.jevApiKey) return { kind: "typesafe", key: cfg.jevApiKey };
   if (cfg.openRouterApiKey) return { kind: "openrouter", key: cfg.openRouterApiKey };
   if (cfg.aiGatewayApiKey) return { kind: "gateway", key: cfg.aiGatewayApiKey, auth: "api-key" };
   // OPENROUTER_API_KEY is shared with many other tools, so it only applies when no Jev-specific key is configured.
-  if (env.OPENROUTER_API_KEY) return { kind: "openrouter", key: env.OPENROUTER_API_KEY };
+  if (env[ENV_OPENROUTER_API_KEY]) return { kind: "openrouter", key: env[ENV_OPENROUTER_API_KEY] };
   return null;
 }
 
@@ -117,6 +123,9 @@ export async function ask(state, questions, { env = process.env, fetchImpl = fet
     const kind = explicitBackend.kind;
     if (typeof kind !== "string" || !DEFAULT_MODEL[kind]) {
       throw new Error(`invalid explicit backend: ${JSON.stringify(explicitBackend)}`);
+    }
+    if (explicitBackend.key !== undefined && typeof explicitBackend.key !== "string") {
+      throw new Error("invalid explicit backend: key must be a string");
     }
     if (kind === "custom") {
       if (!explicitBackend.url || typeof explicitBackend.url !== "string") {

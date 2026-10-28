@@ -338,9 +338,8 @@ function writeConfig(file, obj) {
     } catch (err) {
       if (err.code !== "ENOSYS" && err.code !== "EPERM") console.warn(`jev-guard: failed to set permissions on ${target}: ${err.message}`);
     }
-  } catch (err) {
-    try { unlinkSync(tmp); } catch {}
-    throw err;
+  } finally {
+    try { if (existsSync(tmp)) unlinkSync(tmp); } catch {}
   }
 }
 
@@ -349,6 +348,12 @@ function writeConfig(file, obj) {
  * @param {string} file - Path to JSON file
  * @returns {Object} Parsed JSON content or empty object
  */
-function readJson(file) { return existsSync(file) ? JSON.parse(readFileSync(file, "utf8")) : {}; }
+function readJson(file) {
+  try {
+    return existsSync(file) ? JSON.parse(readFileSync(file, "utf8")) : {};
+  } catch {
+    return {};
+  }
+}
 function writeJson(file, obj) { mkdirSync(dirname(file), { recursive: true }); writeFileSync(file, JSON.stringify(obj, null, 2) + "\n"); }
 function die(msg, code = 1) { console.error(`jev-guard: ${msg}${code === 1 ? `\n\n${USAGE}` : ""}`); process.exit(code); }
