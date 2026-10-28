@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -21,7 +21,7 @@ const USAGE = `jev-guard — prompt-injection and dangerous-action guard for cod
                                           claude | codex | copilot | gemini | agy | cursor | pi | opencode
   jev-guard model [model_id]              View or set model in ~/.jev-guard/config.json
                                           (e.g. inception/mercury-decide:free on OpenRouter; --reset to clear)
-  jev-guard backend [name]                View or set preferred backend (typesafe|openrouter|gateway; --reset to clear)
+  jev-guard backend [name]                View or set preferred backend (typesafe|openrouter|gateway|custom; --reset to clear)
   jev-guard key <api key>                 Save the key to ~/.jev-guard/config.json (0600); vck_… keys are
                                           treated as Vercel AI Gateway keys, sk-or-… keys as OpenRouter,
                                           anything else as TypeSafe (--gateway / --openrouter override)
@@ -75,71 +75,82 @@ switch (cmd) {
     install(rest[0]);
     break;
   case "key": {
-    const { CONFIG_FILE, readConfig } = await import("./jev.js");
+    const { configFile } = await import("./jev.js");
+    const file = configFile(process.env);
     const key = rest.find((a) => !a.startsWith("--"));
     if (!key) die("key needs the API key as an argument");
     const kind = rest.includes("--gateway") || key.startsWith("vck_") ? "gateway"
       : rest.includes("--openrouter") || key.startsWith("sk-or-") ? "openrouter" : "typesafe";
     const field = { gateway: "aiGatewayApiKey", openrouter: "openRouterApiKey", typesafe: "jevApiKey" }[kind];
-    const cfg = { ...readConfig(), [field]: key };
-    mkdirSync(dirname(CONFIG_FILE), { recursive: true, mode: 0o700 });
-    writeFileSync(CONFIG_FILE, JSON.stringify(cfg, null, 2) + "\n", { mode: 0o600 });
+    const cfg = { ...readJson(file), [field]: key };
+    writeConfig(file, cfg);
     const label = { gateway: "Vercel AI Gateway", openrouter: "OpenRouter", typesafe: "TypeSafe" }[kind];
-    console.log(`jev-guard: ${label} key saved to ${CONFIG_FILE}`);
+    console.log(`jev-guard: ${label} key saved to ${file}`);
     break;
   }
   case "model": {
-    const { CONFIG_FILE, DEFAULT_MODEL, backend, readConfig } = await import("./jev.js");
+    const { DEFAULT_MODEL, backend, configFile, readConfig } = await import("./jev.js");
+    const file = configFile(process.env);
     const targetModel = rest[0];
     if (targetModel) {
-      const cfg = { ...readConfig() };
       if (targetModel === "--reset" || targetModel === "default") {
+        const cfg = { ...readJson(file) };
         delete cfg.model;
-        mkdirSync(dirname(CONFIG_FILE), { recursive: true, mode: 0o700 });
-        writeFileSync(CONFIG_FILE, JSON.stringify(cfg, null, 2) + "\n", { mode: 0o600 });
-        console.log(`jev-guard: model reset to default in ${CONFIG_FILE}`);
+        delete cfg.models;
+        writeConfig(file, cfg);
+        console.log(`jev-guard: model reset to default in ${file}`);
       } else {
+        if (targetModel.startsWith("-")) die(`unknown option: ${targetModel}`);
+        const cfg = { ...readJson(file) };
+        let b; try { b = backend(); } catch {}
         cfg.model = targetModel;
-        mkdirSync(dirname(CONFIG_FILE), { recursive: true, mode: 0o700 });
-        writeFileSync(CONFIG_FILE, JSON.stringify(cfg, null, 2) + "\n", { mode: 0o600 });
-        console.log(`jev-guard: model set to ${targetModel} in ${CONFIG_FILE}`);
+        if (b) cfg.models = { ...(cfg.models ?? {}), [b.kind]: targetModel };
+        writeConfig(file, cfg);
+        console.log(`jev-guard: model set to ${targetModel} in ${file}`);
       }
       break;
     }
     const cfg = readConfig();
-    const b = backend();
-    const activeModel = process.env.JEV_MODEL ?? cfg.model ?? (b ? DEFAULT_MODEL[b.kind] : "none");
-    const source = process.env.JEV_MODEL ? "env JEV_MODEL" : cfg.model ? "config.json" : "default";
+    let b; try { b = backend(); } catch {}
+    const activeModel = process.env.JEV_MODEL ?? (b ? cfg.models?.[b.kind] : null) ?? cfg.model ?? (b ? DEFAULT_MODEL[b.kind] : "none");
+    const source = process.env.JEV_MODEL ? "env JEV_MODEL" : (b && cfg.models?.[b.kind]) ? "config.json (backend-specific)" : cfg.model ? "config.json" : "default";
     console.log(`Model: ${activeModel} (${source})`);
     if (b) console.log(`Backend: ${b.kind}`);
     else console.log("Backend: none (no credentials configured)");
     break;
   }
   case "backend": {
-    const { CONFIG_FILE, backend, readConfig } = await import("./jev.js");
+    const { backend, configFile, readConfig, resolveBackend } = await import("./jev.js");
+    const file = configFile(process.env);
     const targetBackend = rest[0];
     if (targetBackend) {
       const allowed = ["typesafe", "openrouter", "gateway", "custom"];
-      const cfg = { ...readConfig() };
       if (targetBackend === "--reset" || targetBackend === "default") {
+        const cfg = { ...readJson(file) };
         delete cfg.backend;
-        mkdirSync(dirname(CONFIG_FILE), { recursive: true, mode: 0o700 });
-        writeFileSync(CONFIG_FILE, JSON.stringify(cfg, null, 2) + "\n", { mode: 0o600 });
-        console.log(`jev-guard: backend reset to default in ${CONFIG_FILE}`);
-      } else if (!allowed.includes(targetBackend.toLowerCase())) {
-        die(`unknown backend: ${targetBackend} (expected one of: ${allowed.join(", ")})`);
+        writeConfig(file, cfg);
+        console.log(`jev-guard: backend reset to default in ${file}`);
       } else {
-        cfg.backend = targetBackend.toLowerCase();
-        mkdirSync(dirname(CONFIG_FILE), { recursive: true, mode: 0o700 });
-        writeFileSync(CONFIG_FILE, JSON.stringify(cfg, null, 2) + "\n", { mode: 0o600 });
-        console.log(`jev-guard: backend set to ${targetBackend.toLowerCase()} in ${CONFIG_FILE}`);
+        if (targetBackend.startsWith("-")) die(`unknown option: ${targetBackend}`);
+        const normalized = targetBackend.toLowerCase();
+        if (!allowed.includes(normalized)) {
+          die(`unknown backend: ${targetBackend} (expected one of: ${allowed.join(", ")})`);
+        }
+        if (!resolveBackend(normalized)) {
+          console.error(`jev-guard: no ${normalized} credentials configured yet; it will be used once configured`);
+        }
+        const cfg = { ...readJson(file), backend: normalized };
+        writeConfig(file, cfg);
+        console.log(`jev-guard: backend set to ${normalized} in ${file}`);
       }
       break;
     }
     const cfg = readConfig();
-    const b = backend();
+    let b; try { b = backend(); } catch {}
+    const selected = process.env.JEV_BACKEND ?? cfg.backend;
     const source = process.env.JEV_BACKEND ? "env JEV_BACKEND" : cfg.backend ? "config.json" : "auto-detected";
     if (b) console.log(`Backend: ${b.kind} (${source})`);
+    else if (selected) console.log(`Backend: ${String(selected).toLowerCase()} (${source}; no credentials configured)`);
     else console.log("Backend: none (no credentials configured)");
     break;
   }
@@ -247,6 +258,15 @@ function install(target) {
 async function keyHint() {
   const { backend } = await import("./jev.js");
   if (!backend()) console.log("No API key found yet: run `jev-guard key <key>` (or export JEV_API_KEY / OPENROUTER_API_KEY / AI_GATEWAY_API_KEY, or JEV_BASE_URL for a local server). Until then the guard fails open.");
+}
+
+function writeConfig(file, obj) {
+  mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
+  const tmp = `${file}.tmp.${process.pid}.${Date.now()}`;
+  writeFileSync(tmp, JSON.stringify(obj, null, 2) + "\n", { mode: 0o600 });
+  try { chmodSync(tmp, 0o600); } catch {}
+  renameSync(tmp, file);
+  try { chmodSync(file, 0o600); } catch {}
 }
 
 function readJson(file) { return existsSync(file) ? JSON.parse(readFileSync(file, "utf8")) : {}; }

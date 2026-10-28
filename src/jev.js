@@ -19,6 +19,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 
 export const CONFIG_FILE = join(homedir(), ".jev-guard", "config.json");
+export const configFile = (env = process.env) => env.JEV_GUARD_CONFIG ?? CONFIG_FILE;
 
 // Env first (CLIs inherit the shell); then ~/.jev-guard/config.json written by `jev-guard key`, which is what
 // GUI hosts such as Cursor or Zed need since they don't see your shell profile.
@@ -44,23 +45,28 @@ export function resolveBackend(kind, env = process.env) {
     return null;
   }
   if (target === "openrouter") {
-    const key = env.OPENROUTER_API_KEY ?? cfg.openRouterApiKey;
+    const key = cfg.openRouterApiKey ?? env.OPENROUTER_API_KEY;
     return key ? { kind: "openrouter", key } : null;
   }
   return null;
 }
 
 export function backend(env = process.env) {
-  const explicit = env.JEV_BACKEND ?? readConfig(env).backend;
-  if (explicit) {
-    const resolved = resolveBackend(explicit, env);
-    if (resolved) return resolved;
+  if (env.JEV_BACKEND) {
+    const resolved = resolveBackend(env.JEV_BACKEND, env);
+    if (!resolved) throw new Error(`backend "${env.JEV_BACKEND}" has no credentials or is unknown (JEV_BACKEND)`);
+    return resolved;
   }
   if (env.JEV_BASE_URL) return { kind: "custom", key: env.JEV_BASE_API_KEY, url: systemOneUrl(env.JEV_BASE_URL) };
+  const cfg = readConfig(env);
+  if (cfg.backend) {
+    const resolved = resolveBackend(cfg.backend, env);
+    if (!resolved) throw new Error(`backend "${cfg.backend}" has no credentials or is unknown (config.backend)`);
+    return resolved;
+  }
   if (env.JEV_API_KEY) return { kind: "typesafe", key: env.JEV_API_KEY };
   if (env.AI_GATEWAY_API_KEY) return { kind: "gateway", key: env.AI_GATEWAY_API_KEY, auth: "api-key" };
   if (env.VERCEL_OIDC_TOKEN) return { kind: "gateway", key: env.VERCEL_OIDC_TOKEN, auth: "oidc" };  // `vercel env pull`; expires in ~12h
-  const cfg = readConfig(env);
   if (cfg.jevApiKey) return { kind: "typesafe", key: cfg.jevApiKey };
   if (cfg.openRouterApiKey) return { kind: "openrouter", key: cfg.openRouterApiKey };
   if (cfg.aiGatewayApiKey) return { kind: "gateway", key: cfg.aiGatewayApiKey, auth: "api-key" };
@@ -80,7 +86,7 @@ export function systemOneUrl(base) {
 }
 
 export function readConfig(env = process.env) {
-  try { return JSON.parse(readFileSync(env.JEV_GUARD_CONFIG ?? CONFIG_FILE, "utf8")); } catch { return {}; }
+  try { return JSON.parse(readFileSync(configFile(env), "utf8")); } catch { return {}; }
 }
 
 /** @returns {Promise<Record<string, {p?: number, choice?: string, score?: number, probabilities?: Record<string, number>, confidence?: number}>>} */
@@ -94,7 +100,7 @@ export async function ask(state, questions, { env = process.env, fetchImpl = fet
   const budget = AbortSignal.timeout(timeoutMs ?? +(env.JEV_GUARD_TIMEOUT_MS || 20_000));
   const abort = signal ? AbortSignal.any([signal, budget]) : budget;
   const cfg = readConfig(env);
-  const model = explicitModel ?? env.JEV_MODEL ?? cfg.model ?? DEFAULT_MODEL[b.kind];
+  const model = explicitModel ?? env.JEV_MODEL ?? cfg.models?.[b.kind] ?? cfg.model ?? DEFAULT_MODEL[b.kind];
   const url = { custom: b.url, typesafe: TYPESAFE_URL, openrouter: OPENROUTER_URL, gateway: GATEWAY_URL }[b.kind];
   const request = () => fetchImpl(url, {
     method: "POST",

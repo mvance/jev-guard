@@ -191,7 +191,7 @@ jev-guard scan [file]                   Scan a file or stdin; exit 2 if flagged
 jev-guard scan-skills [paths...]        Sweep skills/plugins/rules/CLAUDE.md files (default: every agent's user dirs + this project)
 jev-guard install <agent>               claude | codex | copilot | gemini | agy | cursor | pi | opencode
 jev-guard model [model_id]              View or set model in ~/.jev-guard/config.json (--reset to clear)
-jev-guard backend [name]                View or set preferred backend (typesafe|openrouter|gateway; --reset to clear)
+jev-guard backend [name]                View or set preferred backend (typesafe|openrouter|gateway|custom; --reset to clear)
 jev-guard key <api key>                 Save the key to ~/.jev-guard/config.json
 ```
 
