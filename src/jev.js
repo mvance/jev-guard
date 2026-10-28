@@ -99,8 +99,12 @@ export function readConfig(env = process.env) {
 
 /** @returns {Promise<Record<string, {p?: number, choice?: string, score?: number, probabilities?: Record<string, number>, confidence?: number}>>} */
 export async function ask(state, questions, { env = process.env, fetchImpl = fetch, signal, timeoutMs, backend: explicitBackend, model: explicitModel } = {}) {
+  if (explicitBackend && (!explicitBackend.kind || !DEFAULT_MODEL[explicitBackend.kind])) {
+    throw new Error(`invalid explicit backend: ${JSON.stringify(explicitBackend)}`);
+  }
   const b = explicitBackend ?? backend(env);
   if (!b) throw new Error("no credentials: run `jev-guard key <key>` or set JEV_API_KEY / OPENROUTER_API_KEY / AI_GATEWAY_API_KEY / JEV_BASE_URL");
+  if (b.kind === "custom" && !b.url) throw new Error("custom backend requires a url");
   const gw = b.kind === "gateway";
   const q = gw ? mapValues(questions, (x) => (x.type === "noul" ? { ...x, type: "boolean" } : x)) : questions;
   // One budget for the whole call, retries included: every host kills a hook at ~30 s, and a hook that dies

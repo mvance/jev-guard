@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { randomBytes } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -102,7 +102,9 @@ switch (cmd) {
         console.log(`jev-guard: model reset to default in ${file}`);
       } else {
         if (targetModel.startsWith("-")) die(`unknown option: ${targetModel}`);
-        if (!/^[-_a-zA-Z0-9:/.]+$/.test(targetModel)) die(`invalid model ID: ${targetModel}`);
+        if (!/^[-_a-zA-Z0-9:/.]+$/.test(targetModel) || targetModel.includes("//") || targetModel.includes("..")) {
+          die(`invalid model ID: ${targetModel}`);
+        }
         const cfg = { ...readJson(file) };
         const b = safeBackend(backend);
         const selectedKind = selectedBackendKind(cfg, process.env, b);
@@ -299,24 +301,30 @@ async function keyHint() {
  * @returns {string|undefined} Normalized backend kind in lowercase, or undefined
  */
 function selectedBackendKind(cfg = {}, env = process.env, b) {
-  const raw = env.JEV_BACKEND ?? (env.JEV_BASE_URL ? "custom" : (cfg.backend ?? (cfg.jevBaseUrl ? "custom" : b?.kind)));
+  let raw;
+  if (env.JEV_BACKEND) raw = env.JEV_BACKEND;
+  else if (env.JEV_BASE_URL) raw = "custom";
+  else if (cfg.backend) raw = cfg.backend;
+  else if (cfg.jevBaseUrl) raw = "custom";
+  else if (b?.kind) raw = b.kind;
   return raw ? String(raw).toLowerCase() : undefined;
 }
 
 /**
  * Atomically writes an object as JSON to file using a temporary file, rename, and 0600 mode.
- * Cleans up temporary file if write or rename fails.
+ * Preserves symbolic link destinations and cleans up temporary file if write or rename fails.
  * @param {string} file - Destination file path
  * @param {Object} obj - Object to serialize as JSON
  */
 function writeConfig(file, obj) {
-  mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
-  const tmp = `${file}.tmp.${randomBytes(16).toString("hex")}`;
+  const target = existsSync(file) ? realpathSync(file) : file;
+  mkdirSync(dirname(target), { recursive: true, mode: 0o700 });
+  const tmp = `${target}.tmp.${randomBytes(16).toString("hex")}`;
   try {
     writeFileSync(tmp, JSON.stringify(obj, null, 2) + "\n", { mode: 0o600 });
     try { chmodSync(tmp, 0o600); } catch {}
-    renameSync(tmp, file);
-    try { chmodSync(file, 0o600); } catch {}
+    renameSync(tmp, target);
+    try { chmodSync(target, 0o600); } catch {}
   } catch (err) {
     try { unlinkSync(tmp); } catch {}
     throw err;

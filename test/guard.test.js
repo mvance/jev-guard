@@ -313,7 +313,7 @@ test("key: config file is read when env has no credentials", async () => {
 
 test("model and backend: selection via env and config, and CLI commands", async () => {
   const { execFileSync } = await import("node:child_process");
-  const { mkdtempSync, readFileSync, statSync, writeFileSync } = await import("node:fs");
+  const { lstatSync, mkdtempSync, readFileSync, statSync, symlinkSync, writeFileSync } = await import("node:fs");
   const { tmpdir } = await import("node:os");
   const { join } = await import("node:path");
   const { ask, backend, resolveBackend } = await import("../src/jev.js");
@@ -422,8 +422,19 @@ test("model and backend: selection via env and config, and CLI commands", async 
   assert.match(out, /Model: none/);
   assert.doesNotMatch(out, /undefined/);
 
+  // symlinks are preserved when writing config
+  const realConfig = join(home, "real-config.json");
+  const linkConfig = join(home, "link-config.json");
+  writeFileSync(realConfig, JSON.stringify({ backend: "typesafe" }));
+  symlinkSync(realConfig, linkConfig);
+  runCli(["model", "symlink-model"], { JEV_GUARD_CONFIG: linkConfig });
+  assert.equal(lstatSync(linkConfig).isSymbolicLink(), true);
+  assert.equal(JSON.parse(readFileSync(realConfig, "utf8")).models?.typesafe, "symlink-model");
+
   // invalid model ID is rejected
   assert.throws(() => runCli(["model", "bad model ID with spaces"]), /invalid model ID/);
+  assert.throws(() => runCli(["model", "bad//model"]), /invalid model ID/);
+  assert.throws(() => runCli(["model", "bad..model"]), /invalid model ID/);
 
   // ask respects cfg.model and explicit model option
   const seen = [];
@@ -449,6 +460,10 @@ test("model and backend: selection via env and config, and CLI commands", async 
   writeFileSync(cfgFile, JSON.stringify({ openRouterApiKey: "sk-or-1", model: "fallback-model", models: { openrouter: "openrouter-specific" } }));
   await ask("s", q, { env: { JEV_GUARD_CONFIG: cfgFile }, fetchImpl: record });
   assert.equal(seen[3].model, "openrouter-specific");
+
+  // invalid explicitBackend in ask() throws
+  await assert.rejects(() => ask("s", q, { backend: { kind: "nonexistent" }, fetchImpl: record }), /invalid explicit backend/);
+  await assert.rejects(() => ask("s", q, { backend: { kind: "custom" }, fetchImpl: record }), /custom backend requires a url/);
 });
 
 test("backends: OpenRouter and JEV_BASE_URL use the System One shape; a custom server never gets another provider's key", async () => {
