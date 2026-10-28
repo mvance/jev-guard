@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { randomBytes } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -286,20 +286,43 @@ async function keyHint() {
   if (!b) console.log("No API key found yet: run `jev-guard key <key>` (or export JEV_API_KEY / OPENROUTER_API_KEY / AI_GATEWAY_API_KEY, or JEV_BASE_URL for a local server). Until then the guard fails open.");
 }
 
+/**
+ * Resolves the selected backend kind from env, config, or active backend in priority order.
+ * @param {Object} cfg - Parsed config object
+ * @param {NodeJS.ProcessEnv} env - Environment variables
+ * @param {Object} [b] - Resolved backend object if already determined
+ * @returns {string|undefined} Normalized backend kind in lowercase, or undefined
+ */
 function selectedBackendKind(cfg = {}, env = process.env, b) {
   const raw = env.JEV_BACKEND ?? (env.JEV_BASE_URL ? "custom" : (cfg.backend ?? (cfg.jevBaseUrl ? "custom" : b?.kind)));
   return raw ? String(raw).toLowerCase() : undefined;
 }
 
+/**
+ * Atomically writes an object as JSON to file using a temporary file, rename, and 0600 mode.
+ * Cleans up temporary file if write or rename fails.
+ * @param {string} file - Destination file path
+ * @param {Object} obj - Object to serialize as JSON
+ */
 function writeConfig(file, obj) {
   mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
   const tmp = `${file}.tmp.${process.pid}.${Date.now()}.${randomBytes(6).toString("hex")}`;
-  writeFileSync(tmp, JSON.stringify(obj, null, 2) + "\n", { mode: 0o600 });
-  try { chmodSync(tmp, 0o600); } catch {}
-  renameSync(tmp, file);
-  try { chmodSync(file, 0o600); } catch {}
+  try {
+    writeFileSync(tmp, JSON.stringify(obj, null, 2) + "\n", { mode: 0o600 });
+    try { chmodSync(tmp, 0o600); } catch {}
+    renameSync(tmp, file);
+    try { chmodSync(file, 0o600); } catch {}
+  } catch (err) {
+    try { unlinkSync(tmp); } catch {}
+    throw err;
+  }
 }
 
+/**
+ * Reads and parses a JSON file, returning an empty object if missing or invalid.
+ * @param {string} file - Path to JSON file
+ * @returns {Object} Parsed JSON content or empty object
+ */
 function readJson(file) { return existsSync(file) ? JSON.parse(readFileSync(file, "utf8")) : {}; }
 function writeJson(file, obj) { mkdirSync(dirname(file), { recursive: true }); writeFileSync(file, JSON.stringify(obj, null, 2) + "\n"); }
 function die(msg, code = 1) { console.error(`jev-guard: ${msg}${code === 1 ? `\n\n${USAGE}` : ""}`); process.exit(code); }
