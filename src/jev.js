@@ -30,9 +30,9 @@ export function resolveBackend(kind, env = process.env) {
   const cfg = readConfig(env);
   const target = String(kind ?? "").toLowerCase();
   if (target === "custom") {
-    const url = env.JEV_BASE_URL ?? cfg.jevBaseUrl;
-    if (!url) return null;
-    return { kind: "custom", key: env.JEV_BASE_API_KEY ?? cfg.jevBaseApiKey, url: systemOneUrl(url) };
+    if (env.JEV_BASE_URL) return { kind: "custom", key: env.JEV_BASE_API_KEY, url: systemOneUrl(env.JEV_BASE_URL) };
+    if (cfg.jevBaseUrl) return { kind: "custom", key: cfg.jevBaseApiKey, url: systemOneUrl(cfg.jevBaseUrl) };
+    return null;
   }
   if (target === "typesafe") {
     const key = env.JEV_API_KEY ?? cfg.jevApiKey;

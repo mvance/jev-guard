@@ -333,6 +333,12 @@ test("model and backend: selection via env and config, and CLI commands", async 
   writeFileSync(cfgWithKey, JSON.stringify({ openRouterApiKey: "sk-saved" }));
   assert.deepEqual(resolveBackend("openrouter", { OPENROUTER_API_KEY: "sk-env", JEV_GUARD_CONFIG: cfgWithKey }), { kind: "openrouter", key: "sk-saved" });
 
+  // JEV_BASE_URL in env does not use saved custom server key from another URL
+  const cfgWithCustomKey = join(mkdtempSync(join(tmpdir(), "jev-cfg-")), "config.json");
+  writeFileSync(cfgWithCustomKey, JSON.stringify({ jevBaseApiKey: "saved_key", jevBaseUrl: "https://saved.example.com" }));
+  assert.equal(resolveBackend("custom", { JEV_BASE_URL: "http://127.0.0.1:8009", JEV_GUARD_CONFIG: cfgWithCustomKey }).key, undefined);
+  assert.equal(resolveBackend("custom", { JEV_BASE_URL: "http://127.0.0.1:8009", JEV_BASE_API_KEY: "env_key", JEV_GUARD_CONFIG: cfgWithCustomKey }).key, "env_key");
+
   // JEV_BACKEND env overrides default priority
   const envBoth = { JEV_API_KEY: "ts", OPENROUTER_API_KEY: "sk-or-1", JEV_GUARD_CONFIG: missing };
   assert.equal(backend(envBoth).kind, "typesafe");
@@ -360,21 +366,27 @@ test("model and backend: selection via env and config, and CLI commands", async 
   const runCli = (args, extra = {}) => execFileSync(process.execPath, ["src/cli.js", ...args], { env: { ...cleanEnv, ...extra }, cwd }).toString("utf8");
   const cfgFile = join(home, ".jev-guard", "config.json");
 
+  runCli(["backend", "openrouter"]);
+  assert.equal(JSON.parse(readFileSync(cfgFile, "utf8")).backend, "openrouter");
+  let out = runCli(["backend"]);
+  assert.match(out, /Backend: openrouter/);
+
   runCli(["model", "inception/mercury-decide:free"]);
-  assert.equal(JSON.parse(readFileSync(cfgFile, "utf8")).model, "inception/mercury-decide:free");
+  const parsedCfg = JSON.parse(readFileSync(cfgFile, "utf8"));
+  assert.equal(parsedCfg.models?.openrouter, "inception/mercury-decide:free");
+  assert.equal(parsedCfg.model, undefined);
   assert.equal(statSync(cfgFile).mode & 0o777, 0o600);
-  let out = runCli(["model"]);
-  assert.match(out, /Model: inception\/mercury-decide:free \(config\.json\)/);
+  out = runCli(["model"]);
+  assert.match(out, /Model: inception\/mercury-decide:free/);
 
   runCli(["model", "--reset"]);
   assert.equal(JSON.parse(readFileSync(cfgFile, "utf8")).model, undefined);
+  assert.equal(JSON.parse(readFileSync(cfgFile, "utf8")).models, undefined);
 
   assert.throws(() => runCli(["model", "--unknown"]), /unknown option: --unknown/);
 
-  runCli(["backend", "openrouter"]);
-  assert.equal(JSON.parse(readFileSync(cfgFile, "utf8")).backend, "openrouter");
-  out = runCli(["backend"]);
-  assert.match(out, /Backend: openrouter/);
+  out = runCli(["backend"], { JEV_BASE_URL: "http://127.0.0.1:8009" });
+  assert.match(out, /Backend: custom \(env JEV_BASE_URL\)/);
 
   runCli(["backend", "--reset"]);
   assert.equal(JSON.parse(readFileSync(cfgFile, "utf8")).backend, undefined);

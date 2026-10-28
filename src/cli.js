@@ -103,8 +103,12 @@ switch (cmd) {
         if (targetModel.startsWith("-")) die(`unknown option: ${targetModel}`);
         const cfg = { ...readJson(file) };
         let b; try { b = backend(); } catch {}
-        cfg.model = targetModel;
-        if (b) cfg.models = { ...(cfg.models ?? {}), [b.kind]: targetModel };
+        const selectedKind = process.env.JEV_BACKEND ?? cfg.backend ?? (process.env.JEV_BASE_URL ? "custom" : b?.kind);
+        if (selectedKind) {
+          cfg.models = { ...(cfg.models ?? {}), [selectedKind]: targetModel };
+        } else {
+          cfg.model = targetModel;
+        }
         writeConfig(file, cfg);
         console.log(`jev-guard: model set to ${targetModel} in ${file}`);
       }
@@ -112,10 +116,13 @@ switch (cmd) {
     }
     const cfg = readConfig();
     let b; try { b = backend(); } catch {}
-    const activeModel = process.env.JEV_MODEL ?? (b ? cfg.models?.[b.kind] : null) ?? cfg.model ?? (b ? DEFAULT_MODEL[b.kind] : "none");
-    const source = process.env.JEV_MODEL ? "env JEV_MODEL" : (b && cfg.models?.[b.kind]) ? "config.json (backend-specific)" : cfg.model ? "config.json" : "default";
+    const selectedKind = process.env.JEV_BACKEND ?? cfg.backend ?? (process.env.JEV_BASE_URL ? "custom" : b?.kind);
+    const activeKind = b?.kind ?? selectedKind;
+    const activeModel = process.env.JEV_MODEL ?? (activeKind ? cfg.models?.[activeKind] : null) ?? cfg.model ?? (activeKind ? DEFAULT_MODEL[activeKind] : "none");
+    const source = process.env.JEV_MODEL ? "env JEV_MODEL" : (activeKind && cfg.models?.[activeKind]) ? "config.json (backend-specific)" : cfg.model ? "config.json" : "default";
     console.log(`Model: ${activeModel} (${source})`);
     if (b) console.log(`Backend: ${b.kind}`);
+    else if (selectedKind) console.log(`Backend: ${String(selectedKind).toLowerCase()} (no credentials configured)`);
     else console.log("Backend: none (no credentials configured)");
     break;
   }
@@ -147,8 +154,11 @@ switch (cmd) {
     }
     const cfg = readConfig();
     let b; try { b = backend(); } catch {}
-    const selected = process.env.JEV_BACKEND ?? cfg.backend;
-    const source = process.env.JEV_BACKEND ? "env JEV_BACKEND" : cfg.backend ? "config.json" : "auto-detected";
+    const selected = process.env.JEV_BACKEND ?? (process.env.JEV_BASE_URL ? "custom" : cfg.backend);
+    const source = process.env.JEV_BACKEND ? "env JEV_BACKEND"
+      : process.env.JEV_BASE_URL ? "env JEV_BASE_URL"
+      : cfg.backend ? "config.json"
+      : "auto-detected";
     if (b) console.log(`Backend: ${b.kind} (${source})`);
     else if (selected) console.log(`Backend: ${String(selected).toLowerCase()} (${source}; no credentials configured)`);
     else console.log("Backend: none (no credentials configured)");
@@ -257,7 +267,8 @@ function install(target) {
 
 async function keyHint() {
   const { backend } = await import("./jev.js");
-  if (!backend()) console.log("No API key found yet: run `jev-guard key <key>` (or export JEV_API_KEY / OPENROUTER_API_KEY / AI_GATEWAY_API_KEY, or JEV_BASE_URL for a local server). Until then the guard fails open.");
+  let b; try { b = backend(); } catch {}
+  if (!b) console.log("No API key found yet: run `jev-guard key <key>` (or export JEV_API_KEY / OPENROUTER_API_KEY / AI_GATEWAY_API_KEY, or JEV_BASE_URL for a local server). Until then the guard fails open.");
 }
 
 function writeConfig(file, obj) {
