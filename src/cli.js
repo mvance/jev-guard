@@ -318,6 +318,7 @@ function selectedBackendKind(cfg = {}, env = process.env, b) {
 /**
  * Atomically writes an object as JSON to file using a temporary file, rename, and 0600 mode.
  * Preserves symbolic link destinations and cleans up temporary file if write or rename fails.
+ * Atomic replacement guarantees file integrity; concurrent writes follow last-write-wins semantics.
  * @param {string} file - Destination file path
  * @param {Object} obj - Object to serialize as JSON
  */

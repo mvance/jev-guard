@@ -99,13 +99,14 @@ export function backend(env = process.env) {
 }
 
 /** `<base>/v1/systemone` for a System One server; https only, except plain http to this machine or a private address. */
-export function systemOneUrl(base, source = ENV_JEV_BASE_URL) {
+export function systemOneUrl(base, source = "URL") {
   let u;
   try { u = new URL(base); } catch { throw new Error(`${source} is not a URL: ${base}`); }
   if (u.protocol !== "https:" && !(u.protocol === "http:" && isLocal(u.hostname)))
     throw new Error(`${source} must be https, or http on localhost or a private address: ${base}`);
   u.search = ""; u.hash = "";
-  return u.href.replace(/\/+$/, "") + SYSTEMONE_PATH;
+  const cleaned = u.href.replace(/\/+$/, "").replace(/\/v1\/systemone$/, "");
+  return cleaned + SYSTEMONE_PATH;
 }
 
 /** Reads and parses ~/.jev-guard/config.json (or JEV_GUARD_CONFIG path). Returns empty object on read/parse error. */
@@ -131,8 +132,7 @@ export async function ask(state, questions, { env = process.env, fetchImpl = fet
       if (!explicitBackend.url || typeof explicitBackend.url !== "string") {
         throw new Error("custom backend requires a url");
       }
-      const rawUrl = explicitBackend.url.trim().replace(/\/v1\/systemone\/?$/, "");
-      b = { kind: "custom", url: systemOneUrl(rawUrl, "explicitBackend.url"), key: explicitBackend.key };
+      b = { kind: "custom", url: systemOneUrl(explicitBackend.url, "explicitBackend.url"), key: explicitBackend.key };
     } else if (kind === "gateway") {
       b = { kind: "gateway", key: explicitBackend.key, auth: explicitBackend.auth === "oidc" ? "oidc" : "api-key" };
     } else {
