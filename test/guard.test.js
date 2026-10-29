@@ -813,11 +813,15 @@ test("shadow integration: assessAction, scanContent, and scanInstructions with C
   const dir = mkdtempSync(join(tmpdir(), "jev-guard-shadow-test-"));
   const evalFile = join(dir, "eval.jsonl");
   const cfgFile = join(dir, "config.json");
+  const cacheFile = join(dir, "scan-cache.json");
+  const prevScanCache = process.env.JEV_GUARD_SCAN_CACHE;
+  process.env.JEV_GUARD_SCAN_CACHE = cacheFile;
   const env = {
     JEV_API_KEY: "test-primary",
     OPENROUTER_API_KEY: "test-shadow",
     JEV_GUARD_CONFIG: cfgFile,
     JEV_GUARD_EVAL_FILE: evalFile,
+    JEV_GUARD_SCAN_CACHE: cacheFile,
   };
 
   writeFileSync(cfgFile, JSON.stringify({
@@ -1015,6 +1019,8 @@ test("shadow integration: assessAction, scanContent, and scanInstructions with C
     assert.equal(compMismatch.divergence, "primary=allow, shadow=deny");
     assert.equal(compMismatch.shadowVerdict.level, "deny");
   } finally {
+    if (prevScanCache === undefined) delete process.env.JEV_GUARD_SCAN_CACHE;
+    else process.env.JEV_GUARD_SCAN_CACHE = prevScanCache;
     rmSync(dir, { recursive: true, force: true });
   }
 });
