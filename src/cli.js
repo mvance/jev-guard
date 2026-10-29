@@ -11,7 +11,7 @@ const [cmd, ...rest] = process.argv.slice(2);
 // Model slug format: [org/]model[:variant] allowing alphanumeric, hyphens, underscores, dots;
 // disallowing leading/trailing symbols in segments and directory traversal (..)
 const MODEL_SEGMENT = "[a-zA-Z0-9](?:(?:[a-zA-Z0-9_-]|\\.(?!\\.))*[a-zA-Z0-9])?";
-const MODEL_ID_REGEX = new RegExp(`^${MODEL_SEGMENT}(?:\\/${MODEL_SEGMENT})*(?::${MODEL_SEGMENT})?$`);
+const MODEL_ID_REGEX = new RegExp(`^${MODEL_SEGMENT}(?:\\/${MODEL_SEGMENT})?(?::${MODEL_SEGMENT})?$`);
 
 const USAGE = `jev-guard — prompt-injection and dangerous-action guard for coding agents, powered by Jev
 
