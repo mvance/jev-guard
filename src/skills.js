@@ -43,8 +43,8 @@ export async function scanInstructionsCached({ text, source }, opts = {}) {
   const rawCfg = readConfig(env);
   const cfg = (rawCfg && typeof rawCfg === "object" && !Array.isArray(rawCfg)) ? rawCfg : {};
   const shadow = opts.shadow ?? resolveShadow(cfg, env);
-  const keyPayload = text + (shadow ? `:${shadow.backend}:${shadow.model}` : "");
-  const key = createHash("sha1").update(keyPayload).digest("hex");
+  const shadowKey = shadow?.backend && shadow?.model ? `:${shadow.backend}:${shadow.model}` : "";
+  const key = createHash("sha1").update(text + shadowKey).digest("hex");
   const hit = readCache()[key];
   if (hit) {
     const flagged = judgeInstructions(hit.kind, hit.p, t);

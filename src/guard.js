@@ -219,14 +219,14 @@ export async function assessAction({ tool, input, cwd, agent, context }, opts = 
       parallel,
       level,
       (s) => {
-        if (typeof s.risk?.score !== "number") {
-          throw new Error("missing risk score in shadow response");
+        if (typeof s.risk?.score !== "number" || typeof s.approval?.p !== "number") {
+          throw new Error("missing risk score or approval probability in shadow response");
         }
         const sDecide = decide(s, thresholds(env));
         return {
           level: sDecide.level,
-          risk: s.risk?.score,
-          approval: s.approval?.p,
+          risk: s.risk.score,
+          approval: s.approval.p,
         };
       }
     );
@@ -295,8 +295,11 @@ export async function scanContent({ text, tool, source, task }, opts = {}) {
       parallel,
       primaryLevel,
       (s) => {
+        if (typeof s.directed?.p !== "number") {
+          throw new Error("missing directed probability in shadow response");
+        }
         const sKind = s.kind?.choice ?? "unknown";
-        const sP = s.directed?.p ?? 0;
+        const sP = s.directed.p;
         const sFlagged = sP >= thresholds(env).injectP && (sKind === "injection" || sKind === "canary" || sKind === "unknown");
         return {
           flagged: sFlagged,
@@ -371,8 +374,11 @@ export async function scanInstructions({ text, source }, opts = {}) {
       parallel,
       primaryLevel,
       (s) => {
+        if (typeof s.malicious?.p !== "number") {
+          throw new Error("missing malicious probability in shadow response");
+        }
         const sKind = s.kind?.choice ?? "unknown";
-        const sP = s.malicious?.p ?? 0;
+        const sP = s.malicious.p;
         const sFlagged = judgeInstructions(sKind, sP, thresholds(env));
         return {
           flagged: sFlagged,
