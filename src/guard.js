@@ -148,18 +148,18 @@ export function buildShadowComparison(parallel, primaryLevel, shadowJudgeFn) {
         ...judged,
         latencyMs: parallel.shadowLatencyMs,
       };
-      let shadowLevel;
       if (judged.level !== undefined) {
-        shadowLevel = judged.level;
+        const shadowLevel = judged.level;
         agreed = shadowLevel === primaryLevel;
+        if (!agreed) {
+          divergence = `primary=${primaryLevel}, shadow=${shadowLevel}`;
+        }
       } else {
-        const shadowFlagged = Boolean(judged.flagged);
-        const primaryFlagged = primaryLevel === "flagged" || primaryLevel === true;
-        agreed = shadowFlagged === primaryFlagged;
-        shadowLevel = shadowFlagged ? "flagged" : "clean";
-      }
-      if (!agreed) {
-        divergence = `primary=${primaryLevel}, shadow=${shadowLevel}`;
+        const shadowLevel = judged.flagged ? "flagged" : "clean";
+        agreed = shadowLevel === primaryLevel;
+        if (!agreed) {
+          divergence = `primary=${primaryLevel}, shadow=${shadowLevel}`;
+        }
       }
     } catch (err) {
       shadowVerdict = {
