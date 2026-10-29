@@ -988,6 +988,32 @@ test("shadow integration: assessAction, scanContent, and scanInstructions with C
     } finally {
       server.close();
     }
+
+    // scanInstructionsCached caches with shadow model key
+    const { scanInstructionsCached } = await import("../src/skills.js");
+    const cachedFirst = await scanInstructionsCached({
+      text: "This is a clean skill instruction file with more than two hundred characters for cache testing. ".repeat(4),
+      source: "SKILL.md",
+    }, { env, fetchImpl: fakeFetch });
+    assert.equal(cachedFirst.cached, false);
+
+    const cachedSecond = await scanInstructionsCached({
+      text: "This is a clean skill instruction file with more than two hundred characters for cache testing. ".repeat(4),
+      source: "SKILL.md",
+    }, { env, fetchImpl: fakeFetch });
+    assert.equal(cachedSecond.cached, true);
+
+    // buildShadowComparison helper handles errors and mismatches cleanly
+    const { buildShadowComparison } = await import("../src/guard.js");
+    assert.deepEqual(buildShadowComparison(null), { shadowVerdict: null, agreed: false, divergence: null });
+    const compMismatch = buildShadowComparison(
+      { shadow: { risk: { score: 2.8 } }, shadowBackend: "openrouter", shadowModel: "test", shadowLatencyMs: 40 },
+      "allow",
+      (s) => ({ level: "deny", risk: s.risk.score })
+    );
+    assert.equal(compMismatch.agreed, false);
+    assert.equal(compMismatch.divergence, "primary=allow, shadow=deny");
+    assert.equal(compMismatch.shadowVerdict.level, "deny");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

@@ -43,16 +43,15 @@ export async function scanInstructionsCached({ text, source }, opts = {}) {
   const rawCfg = readConfig(env);
   const cfg = (rawCfg && typeof rawCfg === "object" && !Array.isArray(rawCfg)) ? rawCfg : {};
   const shadow = opts.shadow ?? resolveShadow(cfg, env);
-  const key = createHash("sha1").update(text).digest("hex");
-  const hit = !shadow ? readCache()[key] : null;
+  const keyPayload = text + (shadow ? `:${shadow.backend}:${shadow.model}` : "");
+  const key = createHash("sha1").update(keyPayload).digest("hex");
+  const hit = readCache()[key];
   if (hit) {
     const flagged = judgeInstructions(hit.kind, hit.p, t);
     return { flagged, kind: hit.kind, p: hit.p, cached: true, message: instructionMessage(flagged, hit.kind, hit.p, source) };
   }
   const r = await scanInstructions({ text, source }, opts);
-  if (!shadow) {
-    writeCache({ ...readCache(), [key]: { kind: r.kind, p: +r.p.toFixed(2), at: Date.now() } });  // re-read: another hook may have written meanwhile
-  }
+  writeCache({ ...readCache(), [key]: { kind: r.kind, p: +r.p.toFixed(2), at: Date.now() } });  // re-read: another hook may have written meanwhile
   return { ...r, cached: false };
 }
 

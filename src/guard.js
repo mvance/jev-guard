@@ -133,6 +133,47 @@ export function decide({ risk, approval, user_requested, from_untrusted }, t = t
   return { level: "allow" };
 }
 
+/** Compare primary and shadow outcomes into a verdict and divergence record. */
+export function buildShadowComparison(parallel, primaryLevel, shadowJudgeFn) {
+  if (!parallel) return { shadowVerdict: null, agreed: false, divergence: null };
+  let shadowVerdict = null;
+  let agreed = false;
+  let divergence = null;
+  if (parallel.shadow) {
+    try {
+      const judged = shadowJudgeFn(parallel.shadow);
+      shadowVerdict = {
+        backend: parallel.shadowBackend,
+        model: parallel.shadowModel,
+        ...judged,
+        latencyMs: parallel.shadowLatencyMs,
+      };
+      const shadowLevel = judged.level ?? (judged.flagged ? "flagged" : "clean");
+      agreed = shadowLevel === primaryLevel;
+      if (!agreed) {
+        divergence = `primary=${primaryLevel}, shadow=${shadowLevel}`;
+      }
+    } catch (err) {
+      shadowVerdict = {
+        backend: parallel.shadowBackend,
+        model: parallel.shadowModel,
+        error: `malformed shadow response: ${err.message}`,
+        latencyMs: parallel.shadowLatencyMs,
+      };
+      divergence = `shadow_error: malformed shadow response: ${err.message}`;
+    }
+  } else if (parallel.shadowError) {
+    shadowVerdict = {
+      backend: parallel.shadowBackend,
+      model: parallel.shadowModel,
+      error: parallel.shadowError,
+      latencyMs: parallel.shadowLatencyMs,
+    };
+    divergence = `shadow_error: ${parallel.shadowError}`;
+  }
+  return { shadowVerdict, agreed, divergence };
+}
+
 /** @returns {Promise<null | {level: "allow"|"ask"|"deny", risk: number, approval: number, confidence?: number, message: string}>} null = skipped */
 export async function assessAction({ tool, input, cwd, agent, context }, opts = {}) {
   const env = opts.env ?? process.env;
@@ -166,45 +207,21 @@ export async function assessAction({ tool, input, cwd, agent, context }, opts = 
   const result = { level, why, risk: a.risk.score, approval: a.approval.p ?? 0, userRequested: a.user_requested?.p, fromUntrusted: a.from_untrusted?.p, confidence: a.risk.confidence, message };
 
   if (parallel) {
-    let shadowVerdict = null;
-    let agreed = false;
-    let divergence = null;
-    if (parallel.shadow) {
-      try {
-        if (typeof parallel.shadow.risk?.score !== "number") {
+    const { shadowVerdict, agreed, divergence } = buildShadowComparison(
+      parallel,
+      level,
+      (s) => {
+        if (typeof s.risk?.score !== "number") {
           throw new Error("missing risk score in shadow response");
         }
-        const sDecide = decide(parallel.shadow, thresholds(env));
-        shadowVerdict = {
-          backend: parallel.shadowBackend,
-          model: parallel.shadowModel,
+        const sDecide = decide(s, thresholds(env));
+        return {
           level: sDecide.level,
-          risk: parallel.shadow.risk?.score,
-          approval: parallel.shadow.approval?.p,
-          latencyMs: parallel.shadowLatencyMs,
+          risk: s.risk?.score,
+          approval: s.approval?.p,
         };
-        agreed = sDecide.level === level;
-        if (!agreed) {
-          divergence = `primary=${level}, shadow=${sDecide.level}`;
-        }
-      } catch (err) {
-        shadowVerdict = {
-          backend: parallel.shadowBackend,
-          model: parallel.shadowModel,
-          error: `malformed shadow response: ${err.message}`,
-          latencyMs: parallel.shadowLatencyMs,
-        };
-        divergence = `shadow_error: malformed shadow response: ${err.message}`;
       }
-    } else if (parallel.shadowError) {
-      shadowVerdict = {
-        backend: parallel.shadowBackend,
-        model: parallel.shadowModel,
-        error: parallel.shadowError,
-        latencyMs: parallel.shadowLatencyMs,
-      };
-      divergence = `shadow_error: ${parallel.shadowError}`;
-    }
+    );
 
     await logEvalRecord({
       event: "action",
@@ -265,44 +282,21 @@ export async function scanContent({ text, tool, source, task }, opts = {}) {
     : `jev-guard: clean (${kind}, p=${p.toFixed(2)})`;
 
   if (parallel) {
-    let shadowVerdict = null;
-    let agreed = false;
-    let divergence = null;
-    if (parallel.shadow) {
-      try {
-        const sKind = parallel.shadow.kind?.choice ?? "unknown";
-        const sP = parallel.shadow.directed?.p ?? 0;
+    const primaryLevel = flagged ? "flagged" : "clean";
+    const { shadowVerdict, agreed, divergence } = buildShadowComparison(
+      parallel,
+      primaryLevel,
+      (s) => {
+        const sKind = s.kind?.choice ?? "unknown";
+        const sP = s.directed?.p ?? 0;
         const sFlagged = sP >= thresholds(env).injectP && (sKind === "injection" || sKind === "canary" || sKind === "unknown");
-        shadowVerdict = {
-          backend: parallel.shadowBackend,
-          model: parallel.shadowModel,
+        return {
           flagged: sFlagged,
           kind: sKind,
           p: sP,
-          latencyMs: parallel.shadowLatencyMs,
         };
-        agreed = sFlagged === flagged;
-        if (!agreed) {
-          divergence = `primary=${flagged ? "flagged" : "clean"}, shadow=${sFlagged ? "flagged" : "clean"}`;
-        }
-      } catch (err) {
-        shadowVerdict = {
-          backend: parallel.shadowBackend,
-          model: parallel.shadowModel,
-          error: `malformed shadow response: ${err.message}`,
-          latencyMs: parallel.shadowLatencyMs,
-        };
-        divergence = `shadow_error: malformed shadow response: ${err.message}`;
       }
-    } else if (parallel.shadowError) {
-      shadowVerdict = {
-        backend: parallel.shadowBackend,
-        model: parallel.shadowModel,
-        error: parallel.shadowError,
-        latencyMs: parallel.shadowLatencyMs,
-      };
-      divergence = `shadow_error: ${parallel.shadowError}`;
-    }
+    );
 
     await logEvalRecord({
       event: "content",
@@ -364,44 +358,21 @@ export async function scanInstructions({ text, source }, opts = {}) {
   const flagged = judgeInstructions(kind, p, thresholds(env));
 
   if (parallel) {
-    let shadowVerdict = null;
-    let agreed = false;
-    let divergence = null;
-    if (parallel.shadow) {
-      try {
-        const sKind = parallel.shadow.kind?.choice ?? "unknown";
-        const sP = parallel.shadow.malicious?.p ?? 0;
+    const primaryLevel = flagged ? "flagged" : "clean";
+    const { shadowVerdict, agreed, divergence } = buildShadowComparison(
+      parallel,
+      primaryLevel,
+      (s) => {
+        const sKind = s.kind?.choice ?? "unknown";
+        const sP = s.malicious?.p ?? 0;
         const sFlagged = judgeInstructions(sKind, sP, thresholds(env));
-        shadowVerdict = {
-          backend: parallel.shadowBackend,
-          model: parallel.shadowModel,
+        return {
           flagged: sFlagged,
           kind: sKind,
           p: sP,
-          latencyMs: parallel.shadowLatencyMs,
         };
-        agreed = sFlagged === flagged;
-        if (!agreed) {
-          divergence = `primary=${flagged ? "flagged" : "clean"}, shadow=${sFlagged ? "flagged" : "clean"}`;
-        }
-      } catch (err) {
-        shadowVerdict = {
-          backend: parallel.shadowBackend,
-          model: parallel.shadowModel,
-          error: `malformed shadow response: ${err.message}`,
-          latencyMs: parallel.shadowLatencyMs,
-        };
-        divergence = `shadow_error: malformed shadow response: ${err.message}`;
       }
-    } else if (parallel.shadowError) {
-      shadowVerdict = {
-        backend: parallel.shadowBackend,
-        model: parallel.shadowModel,
-        error: parallel.shadowError,
-        latencyMs: parallel.shadowLatencyMs,
-      };
-      divergence = `shadow_error: ${parallel.shadowError}`;
-    }
+    );
 
     await logEvalRecord({
       event: "instruction",
