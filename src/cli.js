@@ -13,7 +13,7 @@ const USAGE = `jev-guard — prompt-injection and dangerous-action guard for cod
   jev-guard hook [--agent codex|copilot]  Command hook (JSON on stdin → JSON on stdout) for Claude Code, Codex, Copilot CLI,
                                           Gemini CLI and Cursor; the host is detected from the payload, --agent overrides
   jev-guard acp -- <agent command...>     ACP proxy: jev-guard acp -- claude-agent-acp
-  jev-guard check <tool> '<json input>'   Assess one tool call, e.g. check Bash '{"command":"rm -rf /"}'
+  jev-guard check <tool> '<json input>'   Assess one tool call, e.g. check Bash '{"command":"rm -rf /"}' [--compare]
   jev-guard scan [file]                   Scan a file (or stdin) for AI-directed instructions
   jev-guard scan-skills [paths...]        Sweep skills, plugins, rules and CLAUDE.md/AGENTS.md files (default: every
                                           agent's user dirs + the current project) for instructions their installer
@@ -23,6 +23,8 @@ const USAGE = `jev-guard — prompt-injection and dangerous-action guard for cod
   jev-guard model [model_id]              View or set model in ~/.jev-guard/config.json
                                           (e.g. inception/mercury-decide:free on OpenRouter; --reset to clear)
   jev-guard backend [name]                View or set preferred backend (typesafe|openrouter|gateway|custom; --reset to clear)
+  jev-guard shadow [model_id | off]       View or set shadow evaluation model in ~/.jev-guard/config.json
+  jev-guard eval-report [--json]          View agreement and latency report from ~/.jev-guard/eval.jsonl
   jev-guard key <api key>                 Save the key to ~/.jev-guard/config.json (0600); vck_… keys are
                                           treated as Vercel AI Gateway keys, sk-or-… keys as OpenRouter,
                                           anything else as TypeSafe (--gateway / --openrouter override)
@@ -45,8 +47,31 @@ switch (cmd) {
   }
   case "check": {
     const { assessAction } = await import("./guard.js");
-    const r = await assessAction({ tool: rest[0], input: rest[1] ? JSON.parse(rest[1]) : {}, cwd: process.cwd() }).catch((e) => die(`${e.message} (exit 3)`, 3));
-    console.log(r ? `${r.level.toUpperCase()}  ${r.message}` : "SKIPPED  read-only tool");
+    const compare = rest.includes("--compare");
+    const filtered = rest.filter((a) => a !== "--compare");
+    const r = await assessAction(
+      { tool: filtered[0], input: filtered[1] ? JSON.parse(filtered[1]) : {}, cwd: process.cwd() },
+      compare ? { compare: true } : {}
+    ).catch((e) => die(`${e.message} (exit 3)`, 3));
+    if (!r) {
+      console.log("SKIPPED  read-only tool");
+      break;
+    }
+    if (compare && r.eval) {
+      const { primary, shadow, agreed, divergence } = r.eval;
+      console.log(`PRIMARY [${primary.backend}:${primary.model}] -> ${primary.level.toUpperCase()} (risk: ${primary.risk?.toFixed?.(1) ?? primary.risk}, latency: ${primary.latencyMs}ms)`);
+      if (shadow?.error) {
+        console.log(`SHADOW  [${shadow.backend}:${shadow.model}] -> ERROR: ${shadow.error}`);
+      } else if (shadow) {
+        console.log(`SHADOW  [${shadow.backend}:${shadow.model}] -> ${shadow.level.toUpperCase()} (risk: ${shadow.risk?.toFixed?.(1) ?? shadow.risk}, latency: ${shadow.latencyMs}ms)`);
+      }
+      console.log(`VERDICT: ${agreed ? "AGREED" : "DIVERGED (" + divergence + ")"}`);
+    } else {
+      if (compare && !r.eval) {
+        console.error("jev-guard: shadow evaluation is disabled; showing primary verdict only (enable with `jev-guard shadow <model_id>`)");
+      }
+      console.log(`${r.level.toUpperCase()}  ${r.message}`);
+    }
     process.exitCode = r?.level === "deny" ? 2 : r?.level === "ask" ? 1 : 0;
     break;
   }
@@ -180,6 +205,86 @@ switch (cmd) {
     if (b) console.log(`Backend: ${b.kind} (${source})`);
     else if (selected) console.log(`Backend: ${selected} (${source}; no credentials configured)`);
     else console.log("Backend: none (no credentials configured)");
+    break;
+  }
+  case "shadow": {
+    const { configFile, readConfig } = await import("./jev.js");
+    const { resolveShadow } = await import("./eval.js");
+    const file = configFile(process.env);
+    const target = rest[0];
+    if (target) {
+      if (target === "--reset" || target === "off" || target === "default" || target === "none") {
+        const cfg = { ...readJson(file) };
+        delete cfg.shadowModel;
+        delete cfg.shadowBackend;
+        delete cfg.shadow;
+        writeConfig(file, cfg);
+        console.log(`jev-guard: shadow evaluation disabled in ${file}`);
+      } else {
+        if (target.startsWith("-")) die(`unknown option: ${target}`);
+        if (!/^[a-zA-Z0-9_.-]+(\/[a-zA-Z0-9_.-]+)*(:[a-zA-Z0-9_.-]+)?$/.test(target) || target.includes("..")) {
+          die(`invalid model ID: ${target}`);
+        }
+        let shadowBackend = rest[1]?.toLowerCase();
+        if (!shadowBackend) {
+          shadowBackend = target.includes("/") ? "openrouter" : "typesafe";
+        }
+        const { resolveBackend } = await import("./jev.js");
+        if (!resolveBackend(shadowBackend, process.env)) {
+          console.error(`jev-guard: warning: no ${shadowBackend} credentials configured yet; shadow calls will fail until configured`);
+        }
+        const cfg = { ...readJson(file), shadowModel: target, shadowBackend };
+        writeConfig(file, cfg);
+        console.log(`jev-guard: shadow evaluation set to ${target} (${shadowBackend}) in ${file}`);
+      }
+      break;
+    }
+    const cfg = readConfig();
+    const shadow = resolveShadow(cfg, process.env);
+    if (shadow) {
+      const source = process.env.JEV_SHADOW_MODEL ? "env JEV_SHADOW_MODEL" : "config.json";
+      console.log(`Shadow evaluation: enabled (${source})`);
+      console.log(`Shadow model: ${shadow.model}`);
+      console.log(`Shadow backend: ${shadow.backend}`);
+    } else {
+      console.log("Shadow evaluation: disabled (enable with `jev-guard shadow <model_id>`, e.g. inception/mercury-decide:free)");
+    }
+    break;
+  }
+  case "eval-report": {
+    const { evalConfigFile, generateEvalReport, readEvalRecords } = await import("./eval.js");
+    const file = evalConfigFile(process.env);
+    const records = readEvalRecords(file, process.env);
+    const report = generateEvalReport(records);
+    if (rest.includes("--json")) {
+      console.log(JSON.stringify(report, null, 2));
+      break;
+    }
+    if (!report.total) {
+      console.log(`jev-guard: no evaluation records found in ${file}`);
+      console.log("Enable shadow mode with `jev-guard shadow <model_id>` to begin collecting comparison data.");
+      break;
+    }
+    console.log(`jev-guard shadow evaluation report (${file}):`);
+    console.log(`  Total evaluated: ${report.total} calls`);
+    console.log(`  Agreement rate:  ${report.agreementRate}% (${report.agreedCount}/${report.evaluatedCount} agreed)`);
+    if (report.shadowErrors) {
+      console.log(`  Shadow errors:   ${report.shadowErrors}`);
+    }
+    console.log("  Event breakdown:");
+    for (const [k, count] of Object.entries(report.events)) {
+      if (count) console.log(`    ${k}: ${count}`);
+    }
+    console.log("  Latency (ms):");
+    console.log(`    Primary: avg=${report.latency.primary.avg}ms, p50=${report.latency.primary.p50}ms, p95=${report.latency.primary.p95}ms`);
+    console.log(`    Shadow:  avg=${report.latency.shadow.avg}ms, p50=${report.latency.shadow.p50}ms, p95=${report.latency.shadow.p95}ms`);
+    if (report.divergences.length) {
+      console.log(`\n  Recent divergences (${report.divergences.length} total):`);
+      for (const d of report.divergences.slice(-5)) {
+        const date = new Date(d.timestamp).toISOString().slice(11, 19);
+        console.log(`    [${date}] ${d.tool} (${d.event}): ${d.divergence} — ${d.preview}`);
+      }
+    }
     break;
   }
   default:

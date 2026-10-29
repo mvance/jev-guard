@@ -173,6 +173,10 @@ Results shorter than 200 characters and results of local edit/search tools are s
 | `JEV_GUARD_FAIL_CLOSED` | unset | if set, an unreachable Jev **denies** instead of allowing |
 | `JEV_BACKEND` | unset | explicitly select backend: `openrouter` / `typesafe` / `gateway` / `custom` |
 | `JEV_MODEL` | `jev-latest` / `jev-1.13` / `typesafe-ai/jev` | model id for TypeSafe or `JEV_BASE_URL` / OpenRouter / the gateway |
+| `JEV_SHADOW_MODEL` | unset | shadow model id (e.g. `inception/mercury-decide:free`) for side-by-side evaluation |
+| `JEV_SHADOW_BACKEND` | `openrouter` (if model has `/`) | shadow backend: `openrouter` / `typesafe` / `gateway` / `custom` |
+| `JEV_GUARD_SHADOW_TIMEOUT_MS` | `4000` | timeout budget (ms) for shadow query before aborting (never blocks primary) |
+| `JEV_GUARD_EVAL_FILE` | `~/.jev-guard/eval.jsonl` | local telemetry log file for shadow evaluation records |
 | `JEV_BASE_URL` | unset | any System One server (`<base>/v1/systemone`), e.g. a local Kev; takes precedence over every key |
 | `JEV_BASE_API_KEY` | unset | bearer key sent only to `JEV_BASE_URL` |
 | `JEV_GUARD_CONFIG` | `~/.jev-guard/config.json` | where `jev-guard key` stores the key |
@@ -186,12 +190,14 @@ By default jev-guard fails **open** with a warning on stderr: a dead API must no
 ```
 jev-guard hook [--agent codex|copilot|agy]  Command hook: JSON on stdin → JSON on stdout (Claude Code, Codex, Copilot, agy, Gemini, Cursor)
 jev-guard acp -- <agent command...>     ACP proxy
-jev-guard check <tool> '<json input>'   Assess one tool call; exit 0 allow, 1 ask, 2 deny
+jev-guard check <tool> '<json input>'   Assess one tool call; exit 0 allow, 1 ask, 2 deny ([--compare] runs side-by-side with shadow)
 jev-guard scan [file]                   Scan a file or stdin; exit 2 if flagged
 jev-guard scan-skills [paths...]        Sweep skills/plugins/rules/CLAUDE.md files (default: every agent's user dirs + this project)
 jev-guard install <agent>               claude | codex | copilot | gemini | agy | cursor | pi | opencode
 jev-guard model [model_id]              View or set model in ~/.jev-guard/config.json (override path with JEV_GUARD_CONFIG; --reset to clear)
 jev-guard backend [name]                View or set preferred backend (typesafe|openrouter|gateway|custom; --reset to clear)
+jev-guard shadow [model_id | off]       View or set shadow evaluation model in ~/.jev-guard/config.json
+jev-guard eval-report [--json]          View agreement rates, latency metrics, and divergences from ~/.jev-guard/eval.jsonl
 jev-guard key <api key>                 Save the key to ~/.jev-guard/config.json
 ```
 
@@ -211,7 +217,7 @@ Verified end to end against the live API: Claude Code (`--plugin-dir`, headless)
 
 ## Security and privacy
 
-Only the tool call (name, arguments, cwd) or the tool result is sent to Jev, directly over TLS to `api.typesafe.ai` or `ai-gateway.vercel.sh` (with zero data retention requested). Nothing is stored or logged by jev-guard. Tool results can contain anything your agent just read, so review [TypeSafe's privacy policy](https://typesafe.ai/privacy) before pointing this at sensitive repositories.
+Only the tool call (name, arguments, cwd) or the tool result is sent to Jev, directly over TLS to `api.typesafe.ai` or `ai-gateway.vercel.sh` (with zero data retention requested). Nothing is stored or logged by jev-guard by default. When shadow evaluation is enabled, comparison metrics (tool, verdict, risk score, latency) are appended locally to `~/.jev-guard/eval.jsonl` for offline evaluation. Tool results can contain anything your agent just read, so review [TypeSafe's privacy policy](https://typesafe.ai/privacy) before pointing this at sensitive repositories.
 
 jev-guard is a guardrail, not a sandbox: a hook can be misconfigured, an agent can bypass a tool path, Jev can be wrong. Keep your other controls.
 
