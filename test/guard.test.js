@@ -651,6 +651,9 @@ test("shadow evaluation: resolveShadow, runParallelAsk fault isolation, and tele
   assert.equal(redactSecrets("Bearer eyJhbGciOi..."), "Bearer [REDACTED]");
   assert.equal(redactSecrets("api_key: sk-1234567890abcdef12345678"), "api_key: [REDACTED]");
   assert.equal(redactSecrets("vck_1234567890abcdef"), "[REDACTED_KEY]");
+  assert.equal(redactSecrets("ghp_1234567890abcdef1234567890"), "[REDACTED_KEY]");
+  assert.equal(redactSecrets("AKIAIOSFODNN7EXAMPLE"), "[REDACTED_KEY]");
+  assert.equal(redactSecrets("xoxb-123456789-abcdef"), "[REDACTED_KEY]");
   assert.equal(redactSecrets("clean command ls -la"), "clean command ls -la");
 
   // resolveShadow resolution logic (isolated from developer env)
