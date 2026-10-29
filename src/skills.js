@@ -36,8 +36,14 @@ export function findInstructionFiles(roots) {
  *  hooks that see an instruction file being read or a Skill being loaded. */
 export async function scanInstructionsCached({ text, source }, opts = {}) {
   if (!text || text.length < 200) return null;
-  const t = thresholds(opts.env ?? process.env);
-  const key = createHash("sha1").update(text).digest("hex");
+  const env = opts.env ?? process.env;
+  const t = thresholds(env);
+  const { resolveShadow } = await import("./eval.js");
+  const { readConfig } = await import("./jev.js");
+  const rawCfg = readConfig(env);
+  const cfg = (rawCfg && typeof rawCfg === "object" && !Array.isArray(rawCfg)) ? rawCfg : {};
+  const shadow = opts.shadow ?? resolveShadow(cfg, env);
+  const key = createHash("sha1").update(JSON.stringify([text, shadow?.backend ?? null, shadow?.model ?? null])).digest("hex");
   const hit = readCache()[key];
   if (hit) {
     const flagged = judgeInstructions(hit.kind, hit.p, t);
