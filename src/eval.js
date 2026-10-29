@@ -13,6 +13,11 @@ export const EVAL_FILE = join(homedir(), ".jev-guard", "eval.jsonl");
 /** Returns the path to eval.jsonl, honoring the JEV_GUARD_EVAL_FILE environment override if present. */
 export const evalConfigFile = (env = process.env) => env.JEV_GUARD_EVAL_FILE ?? EVAL_FILE;
 
+const BEARER_TOKEN_REGEX = /(Bearer\s+)[A-Za-z0-9_.-]+/gi;
+const API_KEY_REGEX = /(vck_[A-Za-z0-9_.-]{10,}|sk-or-[A-Za-z0-9_.-]{10,}|sk-[A-Za-z0-9_.-]{20,})/g;
+const GENERIC_SECRET_REGEX = /(?:password|secret|passwd|token|apiKey|api_key)\s*[:=]\s*["']?[^"'\s,;]+["']?/gi;
+const PRIVATE_KEY_REGEX = /-----BEGIN [A-Z ]+ PRIVATE KEY-----[\s\S]*?-----END [A-Z ]+ PRIVATE KEY-----/g;
+
 /**
  * Redacts common sensitive patterns (API keys, bearer tokens, passwords) from preview strings.
  * @param {string} text - Raw preview string
@@ -21,13 +26,13 @@ export const evalConfigFile = (env = process.env) => env.JEV_GUARD_EVAL_FILE ?? 
 export function redactSecrets(text) {
   if (!text || typeof text !== "string") return "";
   return text
-    .replace(/(Bearer\s+)[A-Za-z0-9_.-]+/gi, "$1[REDACTED]")
-    .replace(/(vck_[A-Za-z0-9_.-]{10,}|sk-or-[A-Za-z0-9_.-]{10,}|sk-[A-Za-z0-9_.-]{20,})/g, "[REDACTED_KEY]")
-    .replace(/(?:password|secret|passwd|token|apiKey|api_key)\s*[:=]\s*["']?[^"'\s,;]+["']?/gi, (match) => {
+    .replace(BEARER_TOKEN_REGEX, "$1[REDACTED]")
+    .replace(API_KEY_REGEX, "[REDACTED_KEY]")
+    .replace(GENERIC_SECRET_REGEX, (match) => {
       const idx = match.search(/[:=]/);
       return match.slice(0, idx + 1) + " [REDACTED]";
     })
-    .replace(/-----BEGIN [A-Z ]+ PRIVATE KEY-----[\s\S]*?-----END [A-Z ]+ PRIVATE KEY-----/g, "[REDACTED_PRIVATE_KEY]");
+    .replace(PRIVATE_KEY_REGEX, "[REDACTED_PRIVATE_KEY]");
 }
 
 /**
