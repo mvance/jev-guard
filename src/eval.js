@@ -13,8 +13,8 @@ export const EVAL_FILE = join(homedir(), ".jev-guard", "eval.jsonl");
 /** Returns the path to eval.jsonl, honoring the JEV_GUARD_EVAL_FILE environment override if present. */
 export const evalConfigFile = (env = process.env) => env.JEV_GUARD_EVAL_FILE ?? EVAL_FILE;
 
-const BEARER_TOKEN_REGEX = /(Bearer\s+)[A-Za-z0-9_.-]+/gi;
-const API_KEY_REGEX = /(vck_[A-Za-z0-9_.-]{10,}|sk-or-[A-Za-z0-9_.-]{10,}|sk-[A-Za-z0-9_.-]{20,}|gh[pous]_[A-Za-z0-9_]{20,}|AKIA[0-9A-Z]{16}|xox[baprs]-[A-Za-z0-9-]+)/g;
+const BEARER_TOKEN_REGEX = /\b(Bearer\s+)[A-Za-z0-9_.-]+/gi;
+const API_KEY_REGEX = /\b(vck_[A-Za-z0-9_.-]{10,}|sk-or-[A-Za-z0-9_.-]{10,}|sk-[A-Za-z0-9_.-]{20,}|gh[pous]_[A-Za-z0-9_]{20,}|AKIA[0-9A-Z]{16}|xox[baprs]-[A-Za-z0-9-]+)\b/g;
 const GENERIC_SECRET_REGEX = /\b(?:password|secret|passwd|token|apiKey|api_key|auth_token|access_token)\b\s*[:=]\s*["']?[^"'\s,;]+["']?/gi;
 const PRIVATE_KEY_REGEX = /-----BEGIN [A-Z ]+ PRIVATE KEY-----[\s\S]*?-----END [A-Z ]+ PRIVATE KEY-----/g;
 

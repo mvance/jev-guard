@@ -8,6 +8,9 @@ import { fileURLToPath } from "node:url";
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const [cmd, ...rest] = process.argv.slice(2);
 
+const MODEL_SEGMENT = "[a-zA-Z0-9](?:(?:[a-zA-Z0-9_-]|\\.(?!\\.))*[a-zA-Z0-9])?";
+const MODEL_ID_REGEX = new RegExp(`^${MODEL_SEGMENT}(?:\\/${MODEL_SEGMENT})*(?::${MODEL_SEGMENT})?$`);
+
 const USAGE = `jev-guard — prompt-injection and dangerous-action guard for coding agents, powered by Jev
 
   jev-guard hook [--agent codex|copilot]  Command hook (JSON on stdin → JSON on stdout) for Claude Code, Codex, Copilot CLI,
@@ -133,7 +136,7 @@ switch (cmd) {
         console.log(`jev-guard: model reset to default in ${file}`);
       } else {
         if (targetModel.startsWith("-")) die(`unknown option: ${targetModel}`);
-        if (!/^[a-zA-Z0-9_.-]+(\/[a-zA-Z0-9_.-]+)*(:[a-zA-Z0-9_.-]+)?$/.test(targetModel) || targetModel.includes("..")) {
+        if (!MODEL_ID_REGEX.test(targetModel)) {
           die(`invalid model ID: ${targetModel}`);
         }
         const cfg = { ...readJson(file) };
@@ -228,7 +231,7 @@ switch (cmd) {
         console.log(`jev-guard: shadow evaluation disabled in ${file}`);
       } else {
         if (target.startsWith("-")) die(`unknown option: ${target}`);
-        if (!/^[a-zA-Z0-9_.-]+(\/[a-zA-Z0-9_.-]+)*(:[a-zA-Z0-9_.-]+)?$/.test(target) || target.includes("..")) {
+        if (!MODEL_ID_REGEX.test(target)) {
           die(`invalid model ID: ${target}`);
         }
         const allowed = ["typesafe", "openrouter", "gateway", "custom"];
