@@ -131,7 +131,8 @@ export async function ask(state, questions, { env = process.env, fetchImpl = fet
       if (!explicitBackend.url || typeof explicitBackend.url !== "string") {
         throw new Error("custom backend requires a url");
       }
-      b = { kind: "custom", url: systemOneUrl(explicitBackend.url.replace(/\/v1\/systemone$/, ""), "explicitBackend.url"), key: explicitBackend.key };
+      const rawUrl = explicitBackend.url.trim().replace(/\/v1\/systemone\/?$/, "");
+      b = { kind: "custom", url: systemOneUrl(rawUrl, "explicitBackend.url"), key: explicitBackend.key };
     } else if (kind === "gateway") {
       b = { kind: "gateway", key: explicitBackend.key, auth: explicitBackend.auth === "oidc" ? "oidc" : "api-key" };
     } else {

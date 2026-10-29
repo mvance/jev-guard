@@ -330,13 +330,17 @@ function writeConfig(file, obj) {
     try {
       chmodSync(tmp, 0o600);
     } catch (err) {
-      if (err.code !== "ENOSYS" && err.code !== "EPERM") console.warn(`jev-guard: failed to set permissions on ${tmp}: ${err.message}`);
+      if (err.code !== "ENOSYS" && !(process.platform === "win32" && err.code === "EPERM")) {
+        throw new Error(`failed to set permissions on ${tmp}: ${err.message}`);
+      }
     }
     renameSync(tmp, target);
     try {
       chmodSync(target, 0o600);
     } catch (err) {
-      if (err.code !== "ENOSYS" && err.code !== "EPERM") console.warn(`jev-guard: failed to set permissions on ${target}: ${err.message}`);
+      if (err.code !== "ENOSYS" && !(process.platform === "win32" && err.code === "EPERM")) {
+        throw new Error(`failed to set permissions on ${target}: ${err.message}`);
+      }
     }
   } finally {
     try { if (existsSync(tmp)) unlinkSync(tmp); } catch {}
