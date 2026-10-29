@@ -311,6 +311,162 @@ test("key: config file is read when env has no credentials", async () => {
   assert.equal(backend({ JEV_GUARD_CONFIG: join(home, "missing.json") }), null);
 });
 
+test("model and backend: selection via env and config, and CLI commands", async () => {
+  const { execFileSync } = await import("node:child_process");
+  const { lstatSync, mkdtempSync, readFileSync, statSync, symlinkSync, writeFileSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const { ask, backend, resolveBackend } = await import("../src/jev.js");
+  const home = mkdtempSync(join(tmpdir(), "jev-guard-model-"));
+  const cwd = new URL("..", import.meta.url).pathname;
+  const missing = "/nonexistent/jev-guard-config.json";
+
+  // resolveBackend directly
+  assert.deepEqual(resolveBackend("typesafe", { JEV_API_KEY: "ts_k", JEV_GUARD_CONFIG: missing }), { kind: "typesafe", key: "ts_k" });
+  assert.deepEqual(resolveBackend("openrouter", { OPENROUTER_API_KEY: "or_k", JEV_GUARD_CONFIG: missing }), { kind: "openrouter", key: "or_k" });
+  assert.deepEqual(resolveBackend("gateway", { AI_GATEWAY_API_KEY: "gw_k", JEV_GUARD_CONFIG: missing }), { kind: "gateway", key: "gw_k", auth: "api-key" });
+  assert.deepEqual(resolveBackend("custom", { JEV_BASE_URL: "http://127.0.0.1:8009", JEV_BASE_API_KEY: "bk", JEV_GUARD_CONFIG: missing }), { kind: "custom", key: "bk", url: "http://127.0.0.1:8009/v1/systemone" });
+  assert.equal(resolveBackend("unknown", { JEV_API_KEY: "ts_k", JEV_GUARD_CONFIG: missing }), null);
+
+  // saved openRouterApiKey beats shared OPENROUTER_API_KEY
+  const cfgWithKey = join(mkdtempSync(join(tmpdir(), "jev-cfg-")), "config.json");
+  writeFileSync(cfgWithKey, JSON.stringify({ openRouterApiKey: "sk-saved" }));
+  assert.deepEqual(resolveBackend("openrouter", { OPENROUTER_API_KEY: "sk-env", JEV_GUARD_CONFIG: cfgWithKey }), { kind: "openrouter", key: "sk-saved" });
+
+  // JEV_BASE_URL in env does not use saved custom server key from another URL
+  const cfgWithCustomKey = join(mkdtempSync(join(tmpdir(), "jev-cfg-")), "config.json");
+  writeFileSync(cfgWithCustomKey, JSON.stringify({ jevBaseApiKey: "saved_key", jevBaseUrl: "https://saved.example.com" }));
+  assert.equal(resolveBackend("custom", { JEV_BASE_URL: "http://127.0.0.1:8009", JEV_GUARD_CONFIG: cfgWithCustomKey }).key, undefined);
+  assert.equal(resolveBackend("custom", { JEV_BASE_URL: "http://127.0.0.1:8009", JEV_BASE_API_KEY: "env_key", JEV_GUARD_CONFIG: cfgWithCustomKey }).key, "env_key");
+
+  // config-based custom backend and URL source error labeling
+  assert.deepEqual(resolveBackend("custom", { JEV_GUARD_CONFIG: cfgWithCustomKey }), { kind: "custom", key: "saved_key", url: "https://saved.example.com/v1/systemone" });
+  assert.equal(backend({ JEV_GUARD_CONFIG: cfgWithCustomKey }).kind, "custom");
+  const badCustomCfg = join(mkdtempSync(join(tmpdir(), "jev-cfg-")), "config.json");
+  writeFileSync(badCustomCfg, JSON.stringify({ jevBaseUrl: "not-a-url" }));
+  assert.throws(() => resolveBackend("custom", { JEV_GUARD_CONFIG: badCustomCfg }), /jevBaseUrl is not a URL/);
+
+  // saved jevBaseUrl takes precedence over saved cloud keys and OPENROUTER_API_KEY
+  const cfgCustomWithKeys = join(mkdtempSync(join(tmpdir(), "jev-cfg-")), "config.json");
+  writeFileSync(cfgCustomWithKeys, JSON.stringify({ jevBaseUrl: "https://local.example.com", jevApiKey: "ts_k", openRouterApiKey: "or_k" }));
+  assert.equal(backend({ JEV_GUARD_CONFIG: cfgCustomWithKeys, OPENROUTER_API_KEY: "env_or" }).kind, "custom");
+
+  // JEV_BACKEND env overrides default priority
+  const envBoth = { JEV_API_KEY: "ts", OPENROUTER_API_KEY: "sk-or-1", JEV_GUARD_CONFIG: missing };
+  assert.equal(backend(envBoth).kind, "typesafe");
+  assert.equal(backend({ ...envBoth, JEV_BACKEND: "openrouter" }).kind, "openrouter");
+  assert.equal(backend({ ...envBoth, JEV_BACKEND: "typesafe" }).kind, "typesafe");
+
+  // JEV_BASE_URL outranks saved config.backend
+  const cfgWithBackend = join(mkdtempSync(join(tmpdir(), "jev-cfg-")), "config.json");
+  writeFileSync(cfgWithBackend, JSON.stringify({ backend: "openrouter", openRouterApiKey: "sk-or-1" }));
+  assert.equal(backend({ JEV_BASE_URL: "http://127.0.0.1:8009", JEV_GUARD_CONFIG: cfgWithBackend }).kind, "custom");
+
+  // explicit backend without credentials throws
+  assert.throws(() => backend({ JEV_BACKEND: "nonexistent", JEV_GUARD_CONFIG: missing }), /backend "nonexistent" has no credentials or is unknown/);
+  assert.throws(() => backend({ JEV_BACKEND: "typesafe", JEV_GUARD_CONFIG: missing }), /backend "typesafe" has no credentials or is unknown/);
+
+  // CLI model and backend commands in an isolated environment
+  const cleanEnv = { ...process.env, HOME: home };
+  delete cleanEnv.JEV_MODEL;
+  delete cleanEnv.JEV_BACKEND;
+  delete cleanEnv.JEV_GUARD_CONFIG;
+  delete cleanEnv.JEV_BASE_URL;
+  delete cleanEnv.JEV_API_KEY;
+  delete cleanEnv.AI_GATEWAY_API_KEY;
+  delete cleanEnv.OPENROUTER_API_KEY;
+  const runCli = (args, extra = {}) => execFileSync(process.execPath, ["src/cli.js", ...args], { env: { ...cleanEnv, ...extra }, cwd }).toString("utf8");
+  const cfgFile = join(home, ".jev-guard", "config.json");
+
+  runCli(["backend", "openrouter"]);
+  assert.equal(JSON.parse(readFileSync(cfgFile, "utf8")).backend, "openrouter");
+  let out = runCli(["backend"]);
+  assert.match(out, /Backend: openrouter/);
+
+  runCli(["model", "inception/mercury-decide:free"]);
+  const parsedCfg = JSON.parse(readFileSync(cfgFile, "utf8"));
+  assert.equal(parsedCfg.models?.openrouter, "inception/mercury-decide:free");
+  assert.equal(parsedCfg.model, undefined);
+  assert.equal(statSync(cfgFile).mode & 0o777, 0o600);
+  out = runCli(["model"]);
+  assert.match(out, /Model: inception\/mercury-decide:free/);
+
+  runCli(["model", "--reset"]);
+  assert.equal(JSON.parse(readFileSync(cfgFile, "utf8")).model, undefined);
+  assert.equal(JSON.parse(readFileSync(cfgFile, "utf8")).models, undefined);
+
+  assert.throws(() => runCli(["model", "--unknown"]), /unknown option: --unknown/);
+
+  out = runCli(["backend"], { JEV_BASE_URL: "http://127.0.0.1:8009" });
+  assert.match(out, /Backend: custom \(env JEV_BASE_URL\)/);
+
+  runCli(["backend", "--reset"]);
+  assert.equal(JSON.parse(readFileSync(cfgFile, "utf8")).backend, undefined);
+
+  // respect JEV_GUARD_CONFIG in CLI commands
+  const customConfig = join(home, "custom-config.json");
+  runCli(["model", "custom-model"], { JEV_GUARD_CONFIG: customConfig });
+  assert.equal(JSON.parse(readFileSync(customConfig, "utf8")).model, "custom-model");
+
+  // JEV_BACKEND uppercase normalization when setting model
+  runCli(["model", "upper-model"], { JEV_BACKEND: "OPENROUTER" });
+  assert.equal(JSON.parse(readFileSync(cfgFile, "utf8")).models?.openrouter, "upper-model");
+
+  // JEV_BASE_URL precedence over config.backend when setting model
+  runCli(["backend", "openrouter"]);
+  runCli(["model", "custom-server-model"], { JEV_BASE_URL: "http://127.0.0.1:8009" });
+  assert.equal(JSON.parse(readFileSync(cfgFile, "utf8")).models?.custom, "custom-server-model");
+
+  // unknown backend prints Model: none without undefined
+  out = runCli(["model"], { JEV_BACKEND: "unknown-provider" });
+  assert.match(out, /Model: none/);
+  assert.doesNotMatch(out, /undefined/);
+
+  // symlinks are preserved when writing config
+  const realConfig = join(home, "real-config.json");
+  const linkConfig = join(home, "link-config.json");
+  writeFileSync(realConfig, JSON.stringify({ backend: "typesafe" }));
+  symlinkSync(realConfig, linkConfig);
+  runCli(["model", "symlink-model"], { JEV_GUARD_CONFIG: linkConfig });
+  assert.equal(lstatSync(linkConfig).isSymbolicLink(), true);
+  assert.equal(JSON.parse(readFileSync(realConfig, "utf8")).models?.typesafe, "symlink-model");
+
+  // invalid model ID is rejected
+  assert.throws(() => runCli(["model", "bad model ID with spaces"]), /invalid model ID/);
+  assert.throws(() => runCli(["model", "bad//model"]), /invalid model ID/);
+  assert.throws(() => runCli(["model", "bad..model"]), /invalid model ID/);
+
+  // ask respects cfg.model and explicit model option
+  const seen = [];
+  const record = async (url, init) => {
+    seen.push(JSON.parse(init.body));
+    return { ok: true, json: async () => ({ answers: { x: { type: "noul", noul: 0.1 } } }) };
+  };
+  const q = { x: { type: "noul", instructions: "?" } };
+  writeFileSync(cfgFile, JSON.stringify({ openRouterApiKey: "sk-or-1", model: "inception/mercury-decide:free" }));
+
+  await ask("s", q, { env: { JEV_GUARD_CONFIG: cfgFile }, fetchImpl: record });
+  assert.equal(seen[0].model, "inception/mercury-decide:free");
+
+  // env.JEV_MODEL overrides cfg.model
+  await ask("s", q, { env: { JEV_GUARD_CONFIG: cfgFile, JEV_MODEL: "override-model" }, fetchImpl: record });
+  assert.equal(seen[1].model, "override-model");
+
+  // explicit model in options overrides env and config
+  await ask("s", q, { env: { JEV_GUARD_CONFIG: cfgFile, JEV_MODEL: "override-model" }, model: "explicit-model", fetchImpl: record });
+  assert.equal(seen[2].model, "explicit-model");
+
+  // backend-specific model in cfg.models takes precedence over cfg.model
+  writeFileSync(cfgFile, JSON.stringify({ openRouterApiKey: "sk-or-1", model: "fallback-model", models: { openrouter: "openrouter-specific" } }));
+  await ask("s", q, { env: { JEV_GUARD_CONFIG: cfgFile }, fetchImpl: record });
+  assert.equal(seen[3].model, "openrouter-specific");
+
+  // invalid explicitBackend in ask() throws
+  await assert.rejects(() => ask("s", q, { backend: { kind: "nonexistent" }, fetchImpl: record }), /invalid explicit backend/);
+  await assert.rejects(() => ask("s", q, { backend: { kind: "custom" }, fetchImpl: record }), /custom backend requires a url/);
+  await assert.rejects(() => ask("s", q, { backend: { kind: "typesafe", key: 12345 }, fetchImpl: record }), /invalid explicit backend: key must be a string/);
+});
+
 test("backends: OpenRouter and JEV_BASE_URL use the System One shape; a custom server never gets another provider's key", async () => {
   const { ask, backend, systemOneUrl } = await import("../src/jev.js");
   const q = { x: { type: "noul", instructions: "?" } };
