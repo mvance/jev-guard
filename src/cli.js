@@ -41,9 +41,13 @@ switch (cmd) {
       const { main } = await import("./hook.js");
       await main(rest);
     } catch (err) {
-      const failClosed = Boolean(process.env.JEV_GUARD_FAIL_CLOSED);
-      console.error(`jev-guard: hook failed (${err.message}); ${failClosed ? "failing closed (exit 2)" : "failing open"}`);
-      process.exit(failClosed ? 2 : 0);
+      if (process.env.JEV_GUARD_FAIL_CLOSED) {
+        console.error(`jev-guard: hook failed (${err.message}); failing closed`);
+        process.exit(2);
+      } else {
+        console.error(`jev-guard: hook failed (${err.message}); failing open`);
+        process.exit(0);
+      }
     }
     break;
   }

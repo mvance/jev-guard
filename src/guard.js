@@ -141,7 +141,13 @@ export function buildShadowComparison(parallel, primaryLevel, shadowJudgeFn) {
   let divergence = null;
   if (parallel.shadow) {
     try {
+      if (!parallel.shadow || typeof parallel.shadow !== "object") {
+        throw new Error("missing shadow response object");
+      }
       const judged = shadowJudgeFn(parallel.shadow);
+      if (!judged || typeof judged !== "object") {
+        throw new Error("invalid judgment returned by shadow judge");
+      }
       shadowVerdict = {
         backend: parallel.shadowBackend,
         model: parallel.shadowModel,
