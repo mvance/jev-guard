@@ -78,15 +78,20 @@ export function backend(env = process.env) {
     if (!resolved) throw new Error(`backend "${env[ENV_JEV_BACKEND]}" has no credentials or is unknown (JEV_BACKEND)`);
     return resolved;
   }
-  const custom = resolveBackend("custom", env);
-  if (env[ENV_JEV_BASE_URL]) return custom;
+  if (env[ENV_JEV_BASE_URL]) {
+    const custom = resolveBackend("custom", env);
+    if (custom) return custom;
+  }
   const cfg = readConfig(env);
   if (cfg.backend) {
     const resolved = resolveBackend(cfg.backend, env);
     if (!resolved) throw new Error(`backend "${cfg.backend}" has no credentials or is unknown (config.backend)`);
     return resolved;
   }
-  if (custom) return custom;
+  if (cfg.jevBaseUrl) {
+    const custom = resolveBackend("custom", env);
+    if (custom) return custom;
+  }
   if (env[ENV_JEV_API_KEY]) return { kind: "typesafe", key: env[ENV_JEV_API_KEY] };
   if (env[ENV_AI_GATEWAY_API_KEY]) return { kind: "gateway", key: env[ENV_AI_GATEWAY_API_KEY], auth: "api-key" };
   if (env[ENV_VERCEL_OIDC_TOKEN]) return { kind: "gateway", key: env[ENV_VERCEL_OIDC_TOKEN], auth: "oidc" };  // `vercel env pull`; expires in ~12h
@@ -105,8 +110,7 @@ export function systemOneUrl(base, source = "URL") {
   if (u.protocol !== "https:" && !(u.protocol === "http:" && isLocal(u.hostname)))
     throw new Error(`${source} must be https, or http on localhost or a private address: ${base}`);
   u.search = ""; u.hash = "";
-  const cleaned = u.href.replace(/\/+$/, "").replace(/\/v1\/systemone$/, "");
-  return cleaned + SYSTEMONE_PATH;
+  return u.href.replace(/\/+$/, "") + SYSTEMONE_PATH;
 }
 
 /** Reads and parses ~/.jev-guard/config.json (or JEV_GUARD_CONFIG path). Returns empty object on read/parse error. */

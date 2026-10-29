@@ -336,13 +336,6 @@ function writeConfig(file, obj) {
       }
     }
     renameSync(tmp, target);
-    try {
-      chmodSync(target, 0o600);
-    } catch (err) {
-      if (err.code !== "ENOSYS" && !(process.platform === "win32" && err.code === "EPERM")) {
-        throw new Error(`failed to set permissions on ${target}: ${err.message}`);
-      }
-    }
   } finally {
     try { if (existsSync(tmp)) unlinkSync(tmp); } catch {}
   }
