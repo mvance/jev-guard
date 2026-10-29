@@ -175,7 +175,7 @@ Results shorter than 200 characters and results of local edit/search tools are s
 | `JEV_MODEL` | `jev-latest` / `jev-1.13` / `typesafe-ai/jev` | model id for TypeSafe or `JEV_BASE_URL` / OpenRouter / the gateway |
 | `JEV_SHADOW_MODEL` | unset | shadow model id (e.g. `inception/mercury-decide:free`) for side-by-side evaluation |
 | `JEV_SHADOW_BACKEND` | `openrouter` (if model has `/`) | shadow backend: `openrouter` / `typesafe` / `gateway` / `custom` |
-| `JEV_GUARD_SHADOW_TIMEOUT_MS` | `4000` | timeout budget (ms) for shadow query before aborting (never blocks primary) |
+| `JEV_GUARD_SHADOW_TIMEOUT_MS` | `4000` | timeout budget (ms) for shadow query before aborting (primary verdict is never delayed) |
 | `JEV_GUARD_EVAL_FILE` | `~/.jev-guard/eval.jsonl` | local telemetry log file for shadow evaluation records |
 | `JEV_BASE_URL` | unset | any System One server (`<base>/v1/systemone`), e.g. a local Kev; takes precedence over every key |
 | `JEV_BASE_API_KEY` | unset | bearer key sent only to `JEV_BASE_URL` |
@@ -217,7 +217,7 @@ Verified end to end against the live API: Claude Code (`--plugin-dir`, headless)
 
 ## Security and privacy
 
-Only the tool call (name, arguments, cwd) or the tool result is sent to Jev, directly over TLS to `api.typesafe.ai` or `ai-gateway.vercel.sh` (with zero data retention requested). Nothing is stored or logged by jev-guard by default. When shadow evaluation is enabled, comparison metrics (tool, verdict, risk score, latency) are appended locally to `~/.jev-guard/eval.jsonl` for offline evaluation. Tool results can contain anything your agent just read, so review [TypeSafe's privacy policy](https://typesafe.ai/privacy) before pointing this at sensitive repositories.
+Only the action or content state (including relevant context) is sent to the configured System One endpoint(s)—TypeSafe, OpenRouter, the AI Gateway, or `JEV_BASE_URL`—using the configured transport. jev-guard stores session context in `~/.jev-guard/sessions` and instruction-scan results in `~/.jev-guard/scan-cache.json`; shadow evaluation additionally appends tool/content previews (redacted for secrets), verdicts, scores, and latencies to `~/.jev-guard/eval.jsonl` (override with `JEV_GUARD_EVAL_FILE`). Tool results can contain anything your agent just read, so review [TypeSafe's privacy policy](https://typesafe.ai/privacy) before pointing this at sensitive repositories.
 
 jev-guard is a guardrail, not a sandbox: a hook can be misconfigured, an agent can bypass a tool path, Jev can be wrong. Keep your other controls.
 

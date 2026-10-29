@@ -642,20 +642,26 @@ test("opencode: skill results are checked as instruction files (#2)", async () =
 });
 
 test("shadow evaluation: resolveShadow, runParallelAsk fault isolation, and telemetry", async () => {
-  const { generateEvalReport, logEvalRecord, readEvalRecords, resolveShadow, runParallelAsk } = await import("../src/eval.js");
-  const { mkdtempSync, readFileSync, rmSync } = await import("node:fs");
+  const { generateEvalReport, logEvalRecord, readEvalRecords, redactSecrets, resolveShadow, runParallelAsk } = await import("../src/eval.js");
+  const { mkdtempSync, readFileSync, rmSync, writeFileSync } = await import("node:fs");
   const { tmpdir } = await import("node:os");
   const { join } = await import("node:path");
 
-  // resolveShadow resolution logic
-  assert.equal(resolveShadow({ shadowModel: "off" }), null);
-  assert.equal(resolveShadow({ shadowModel: "none" }), null);
+  // redactSecrets sanitizes passwords, bearer tokens, and keys
+  assert.equal(redactSecrets("Bearer eyJhbGciOi..."), "Bearer [REDACTED]");
+  assert.equal(redactSecrets("api_key: sk-1234567890abcdef12345678"), "api_key: [REDACTED]");
+  assert.equal(redactSecrets("vck_1234567890abcdef"), "[REDACTED_KEY]");
+  assert.equal(redactSecrets("clean command ls -la"), "clean command ls -la");
+
+  // resolveShadow resolution logic (isolated from developer env)
+  assert.equal(resolveShadow({ shadowModel: "off" }, {}), null);
+  assert.equal(resolveShadow({ shadowModel: "none" }, {}), null);
   assert.equal(resolveShadow({}, { JEV_SHADOW_MODEL: "off" }), null);
-  assert.deepEqual(resolveShadow({ shadowModel: "inception/mercury-decide:free" }), {
+  assert.deepEqual(resolveShadow({ shadowModel: "inception/mercury-decide:free" }, {}), {
     model: "inception/mercury-decide:free",
     backend: "openrouter",
   });
-  assert.deepEqual(resolveShadow({ shadowModel: "custom-model", shadowBackend: "typesafe" }), {
+  assert.deepEqual(resolveShadow({ shadowModel: "custom-model", shadowBackend: "typesafe" }, {}), {
     model: "custom-model",
     backend: "typesafe",
   });
@@ -664,129 +670,134 @@ test("shadow evaluation: resolveShadow, runParallelAsk fault isolation, and tele
     backend: "gateway",
   });
 
-  // runParallelAsk with both primary and shadow succeeding
-  const state = { tool: "bash", input: { command: "ls" } };
-  const questions = {
-    risk: { type: "score", criteria: ["a", "b", "c", "d"] },
-  };
-  const fakeFetch = async (url, opts) => {
-    const body = JSON.parse(opts.body);
-    return {
-      ok: true,
-      json: async () => ({
-        answers: {
-          risk: { type: "score", score: body.model === "shadow-model" ? 1.0 : 0.0, confidence: 0.9 },
-        },
-      }),
-    };
-  };
-
-  const res = await runParallelAsk(state, questions, {
-    env: { JEV_API_KEY: "test-primary", OPENROUTER_API_KEY: "test-shadow" },
-    fetchImpl: fakeFetch,
-  }, { model: "shadow-model", backend: "openrouter" });
-
-  assert.equal(res.primary.risk.score, 0.0);
-  assert.equal(res.shadow.risk.score, 1.0);
-  assert.equal(res.primaryBackend, "typesafe");
-  assert.equal(res.shadowBackend, "openrouter");
-  assert.equal(typeof res.primaryLatencyMs, "number");
-  assert.equal(typeof res.shadowLatencyMs, "number");
-  assert.equal(res.shadowError, undefined);
-
-  // runParallelAsk fault isolation: shadow failure never breaks primary return
-  const flakyFetch = async (_url, opts) => {
-    const body = JSON.parse(opts.body);
-    if (body.model === "failing-shadow") {
-      return { ok: false, status: 500, text: async () => "Internal server error" };
-    }
-    return {
-      ok: true,
-      json: async () => ({
-        answers: { risk: { type: "score", score: 0.0 } },
-      }),
-    };
-  };
-
-  const resIsolated = await runParallelAsk(state, questions, {
-    env: { JEV_API_KEY: "test-primary", OPENROUTER_API_KEY: "test-shadow" },
-    fetchImpl: flakyFetch,
-  }, { model: "failing-shadow", backend: "openrouter" });
-
-  assert.equal(resIsolated.primary.risk.score, 0.0);
-  assert.equal(resIsolated.shadow, undefined);
-  assert.match(resIsolated.shadowError, /HTTP 500/);
-
-  // runParallelAsk: primary failure throws
-  const failingPrimaryFetch = async (_url, opts) => {
-    const body = JSON.parse(opts.body);
-    if (body.model !== "shadow-model") {
-      return { ok: false, status: 403, text: async () => "Forbidden" };
-    }
-    return {
-      ok: true,
-      json: async () => ({ answers: { risk: { type: "score", score: 0.0 } } }),
-    };
-  };
-  await assert.rejects(
-    () => runParallelAsk(state, questions, {
-      env: { JEV_API_KEY: "test-primary", OPENROUTER_API_KEY: "test-shadow" },
-      fetchImpl: failingPrimaryFetch,
-    }, { model: "shadow-model", backend: "openrouter" }),
-    /HTTP 403/
-  );
-
-  // logEvalRecord, readEvalRecords, and generateEvalReport
   const dir = mkdtempSync(join(tmpdir(), "jev-guard-eval-"));
   const evalFile = join(dir, "eval.jsonl");
-  const env = { JEV_GUARD_EVAL_FILE: evalFile };
+  const dummyCfg = join(dir, "config.json");
+  writeFileSync(dummyCfg, "{}");
 
-  logEvalRecord({
-    event: "action",
-    tool: "bash",
-    preview: "ls",
-    primary: { backend: "typesafe", model: "jev-latest", level: "allow", risk: 0.0, latencyMs: 50 },
-    shadow: { backend: "openrouter", model: "mercury", level: "allow", risk: 0.1, latencyMs: 40 },
-    agreed: true,
-  }, env);
+  try {
+    // runParallelAsk with both primary and shadow succeeding
+    const state = { tool: "bash", input: { command: "ls" } };
+    const questions = {
+      risk: { type: "score", criteria: ["a", "b", "c", "d"] },
+    };
+    const fakeFetch = async (url, opts) => {
+      const body = JSON.parse(opts.body);
+      return {
+        ok: true,
+        json: async () => ({
+          answers: {
+            risk: { type: "score", score: body.model === "shadow-model" ? 1.0 : 0.0, confidence: 0.9 },
+          },
+        }),
+      };
+    };
 
-  logEvalRecord({
-    event: "action",
-    tool: "bash",
-    preview: "rm -rf /",
-    primary: { backend: "typesafe", model: "jev-latest", level: "deny", risk: 3.0, latencyMs: 60 },
-    shadow: { backend: "openrouter", model: "mercury", level: "ask", risk: 2.0, latencyMs: 55 },
-    agreed: false,
-    divergence: "primary=deny, shadow=ask",
-  }, env);
+    const res = await runParallelAsk(state, questions, {
+      env: { JEV_API_KEY: "test-primary", OPENROUTER_API_KEY: "test-shadow", JEV_GUARD_CONFIG: dummyCfg },
+      fetchImpl: fakeFetch,
+    }, { model: "shadow-model", backend: "openrouter" });
 
-  logEvalRecord({
-    event: "content",
-    tool: "scan",
-    preview: "hello world",
-    primary: { backend: "typesafe", model: "jev-latest", flagged: false, latencyMs: 45 },
-    shadow: { backend: "openrouter", model: "mercury", error: "rate limited", latencyMs: 10 },
-    agreed: false,
-    divergence: "shadow_error: rate limited",
-  }, env);
+    assert.equal(res.primary.risk.score, 0.0);
+    assert.equal(res.shadow.risk.score, 1.0);
+    assert.equal(res.primaryBackend, "typesafe");
+    assert.equal(res.shadowBackend, "openrouter");
+    assert.equal(typeof res.primaryLatencyMs, "number");
+    assert.equal(typeof res.shadowLatencyMs, "number");
+    assert.equal(res.shadowError, undefined);
 
-  const records = readEvalRecords(evalFile);
-  assert.equal(records.length, 3);
-  assert.equal(records[0].agreed, true);
-  assert.equal(records[1].agreed, false);
+    // runParallelAsk fault isolation: shadow failure never breaks primary return
+    const flakyFetch = async (_url, opts) => {
+      const body = JSON.parse(opts.body);
+      if (body.model === "failing-shadow") {
+        return { ok: false, status: 500, text: async () => "Internal server error" };
+      }
+      return {
+        ok: true,
+        json: async () => ({
+          answers: { risk: { type: "score", score: 0.0 } },
+        }),
+      };
+    };
 
-  const report = generateEvalReport(records);
-  assert.equal(report.total, 3);
-  assert.equal(report.evaluatedCount, 2);
-  assert.equal(report.agreedCount, 1);
-  assert.equal(report.agreementRate, 50.0);
-  assert.equal(report.divergenceCount, 1);
-  assert.equal(report.shadowErrors, 1);
-  assert.equal(report.events.action, 2);
-  assert.equal(report.events.content, 1);
-  assert.equal(report.latency.primary.p50 >= 45, true);
+    const resIsolated = await runParallelAsk(state, questions, {
+      env: { JEV_API_KEY: "test-primary", OPENROUTER_API_KEY: "test-shadow", JEV_GUARD_CONFIG: dummyCfg },
+      fetchImpl: flakyFetch,
+    }, { model: "failing-shadow", backend: "openrouter" });
 
-  rmSync(dir, { recursive: true, force: true });
+    assert.equal(resIsolated.primary.risk.score, 0.0);
+    assert.equal(resIsolated.shadow, undefined);
+    assert.match(resIsolated.shadowError, /HTTP 500/);
+
+    // runParallelAsk: primary failure throws immediately
+    const failingPrimaryFetch = async (_url, opts) => {
+      const body = JSON.parse(opts.body);
+      if (body.model !== "shadow-model") {
+        return { ok: false, status: 403, text: async () => "Forbidden" };
+      }
+      return {
+        ok: true,
+        json: async () => ({ answers: { risk: { type: "score", score: 0.0 } } }),
+      };
+    };
+    await assert.rejects(
+      () => runParallelAsk(state, questions, {
+        env: { JEV_API_KEY: "test-primary", OPENROUTER_API_KEY: "test-shadow", JEV_GUARD_CONFIG: dummyCfg },
+        fetchImpl: failingPrimaryFetch,
+      }, { model: "shadow-model", backend: "openrouter" }),
+      /HTTP 403/
+    );
+
+    // logEvalRecord, readEvalRecords, and generateEvalReport
+    const env = { JEV_GUARD_EVAL_FILE: evalFile };
+
+    await logEvalRecord({
+      event: "action",
+      tool: "bash",
+      preview: "ls",
+      primary: { backend: "typesafe", model: "jev-latest", level: "allow", risk: 0.0, latencyMs: 50 },
+      shadow: { backend: "openrouter", model: "mercury", level: "allow", risk: 0.1, latencyMs: 40 },
+      agreed: true,
+    }, env);
+
+    await logEvalRecord({
+      event: "action",
+      tool: "bash",
+      preview: "rm -rf /",
+      primary: { backend: "typesafe", model: "jev-latest", level: "deny", risk: 3.0, latencyMs: 60 },
+      shadow: { backend: "openrouter", model: "mercury", level: "ask", risk: 2.0, latencyMs: 55 },
+      agreed: false,
+      divergence: "primary=deny, shadow=ask",
+    }, env);
+
+    await logEvalRecord({
+      event: "content",
+      tool: "scan",
+      preview: "hello world",
+      primary: { backend: "typesafe", model: "jev-latest", flagged: false, latencyMs: 45 },
+      shadow: { backend: "openrouter", model: "mercury", error: "rate limited", latencyMs: 10 },
+      agreed: false,
+      divergence: "shadow_error: rate limited",
+    }, env);
+
+    const records = readEvalRecords(evalFile);
+    assert.equal(records.length, 3);
+    assert.equal(records[0].agreed, true);
+    assert.equal(records[1].agreed, false);
+
+    const report = generateEvalReport(records);
+    assert.equal(report.total, 3);
+    assert.equal(report.evaluatedCount, 2);
+    assert.equal(report.agreedCount, 1);
+    assert.equal(report.agreementRate, 50.0);
+    assert.equal(report.divergenceCount, 1);
+    assert.equal(report.shadowErrors, 1);
+    assert.equal(report.events.action, 2);
+    assert.equal(report.events.content, 1);
+    assert.equal(report.latency.primary.p50 >= 45, true);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test("shadow integration: assessAction, scanContent, and scanInstructions with CLI commands", async () => {
@@ -814,151 +825,173 @@ test("shadow integration: assessAction, scanContent, and scanInstructions with C
     shadowBackend: "openrouter",
   }));
 
-  const fakeFetch = async (_url, opts) => {
-    const body = JSON.parse(opts.body);
-    const isShadow = body.model === "inception/mercury-decide:free";
-    if (body.questions.risk) {
-      return {
-        ok: true,
-        json: async () => ({
-          answers: {
-            risk: { type: "score", score: 0.2, confidence: 0.95 },
-            approval: { type: "noul", noul: 0.1 },
-            user_requested: { type: "noul", noul: 0.9 },
-            from_untrusted: { type: "noul", noul: 0.0 },
-          },
-        }),
-      };
-    }
-    if (body.questions.directed) {
-      return {
-        ok: true,
-        json: async () => ({
-          answers: {
-            directed: { type: "noul", noul: isShadow ? 0.05 : 0.02 },
-            kind: { type: "choice", choice: "benign", confidence: 0.9 },
-          },
-        }),
-      };
-    }
-    if (body.questions.malicious) {
-      return {
-        ok: true,
-        json: async () => ({
-          answers: {
-            malicious: { type: "noul", noul: 0.01 },
-            kind: { type: "choice", choice: "clean", confidence: 0.9 },
-          },
-        }),
-      };
-    }
-    throw new Error("unexpected questions");
-  };
-
-  // assessAction runs with shadow and compare option
-  const actionRes = await assessAction({
-    tool: "bash",
-    input: { command: "git status" },
-    cwd: "/workspace",
-  }, { env, fetchImpl: fakeFetch, compare: true });
-
-  assert.equal(actionRes.level, "allow");
-  assert.ok(actionRes.eval);
-  assert.equal(actionRes.eval.agreed, true);
-  assert.equal(actionRes.eval.shadow.model, "inception/mercury-decide:free");
-
-  // scanContent runs with shadow
-  const contentRes = await scanContent({
-    text: "This is a clean document with more than two hundred characters. ".repeat(4),
-    tool: "view_file",
-  }, { env, fetchImpl: fakeFetch });
-  assert.equal(contentRes.flagged, false);
-
-  // scanInstructions runs with shadow
-  const instrRes = await scanInstructions({
-    text: "This is a clean skill instruction file with more than two hundred characters. ".repeat(4),
-    source: "SKILL.md",
-  }, { env, fetchImpl: fakeFetch });
-  assert.equal(instrRes.flagged, false);
-
-  const loggedRecords = readEvalRecords(evalFile);
-  assert.equal(loggedRecords.length, 3);
-  assert.equal(loggedRecords[0].event, "action");
-  assert.equal(loggedRecords[1].event, "content");
-  assert.equal(loggedRecords[2].event, "instruction");
-
-  // CLI tests for shadow and eval-report
-  const cli = resolve("src/cli.js");
-  const runCli = (args, extraEnv = {}) =>
-    execFileSync(process.execPath, [cli, ...args], {
-      env: { ...process.env, ...env, ...extraEnv },
-      encoding: "utf8",
-    });
-
-  // view shadow status (enabled)
-  const shadowStatus = runCli(["shadow"]);
-  assert.match(shadowStatus, /Shadow evaluation: enabled/);
-  assert.match(shadowStatus, /inception\/mercury-decide:free/);
-
-  // shadow reset / off
-  const shadowOff = runCli(["shadow", "off"]);
-  assert.match(shadowOff, /shadow evaluation disabled/);
-  const shadowDisabled = runCli(["shadow"]);
-  assert.match(shadowDisabled, /Shadow evaluation: disabled/);
-
-  // shadow set
-  const shadowSet = runCli(["shadow", "qwen/qwen3-coder"]);
-  assert.match(shadowSet, /shadow evaluation set to qwen\/qwen3-coder/);
-
-  // eval-report
-  const reportOut = runCli(["eval-report"]);
-  assert.match(reportOut, /jev-guard shadow evaluation report/);
-  assert.match(reportOut, /Total evaluated: 3 calls/);
-  assert.match(reportOut, /Agreement rate:  100%/);
-
-  // eval-report --json
-  const reportJson = JSON.parse(runCli(["eval-report", "--json"]));
-  assert.equal(reportJson.total, 3);
-  assert.equal(reportJson.agreementRate, 100);
-
-  // check with --compare via local test server
-  const { createServer } = await import("node:http");
-  const server = createServer((req, res) => {
-    let body = "";
-    req.on("data", (chunk) => { body += chunk; });
-    req.on("end", () => {
-      res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({
-        answers: {
-          risk: { type: "score", score: 0.0, confidence: 0.9 },
-          approval: { type: "noul", noul: 0.0 },
-        },
-      }));
-    });
-  });
-  await new Promise((res) => server.listen(0, "127.0.0.1", res));
-  const port = server.address().port;
   try {
-    const { stdout: compareOut } = await execFileAsync(
-      process.execPath,
-      [cli, "check", "bash", '{"command":"echo 1"}', "--compare"],
-      {
-        env: {
-          ...process.env,
-          ...env,
-          JEV_BASE_URL: `http://127.0.0.1:${port}`,
-          JEV_SHADOW_BACKEND: "custom",
-          JEV_SHADOW_MODEL: "test-shadow-model",
-        },
-        encoding: "utf8",
+    const fetchCalls = [];
+    const fakeFetch = async (url, opts) => {
+      const body = JSON.parse(opts.body);
+      fetchCalls.push({ url, model: body.model });
+      const isShadow = body.model === "inception/mercury-decide:free";
+      if (body.questions.risk) {
+        return {
+          ok: true,
+          json: async () => ({
+            answers: {
+              risk: { type: "score", score: 0.2, confidence: 0.95 },
+              approval: { type: "noul", noul: 0.1 },
+              user_requested: { type: "noul", noul: 0.9 },
+              from_untrusted: { type: "noul", noul: 0.0 },
+            },
+          }),
+        };
       }
-    );
-    assert.match(compareOut, /PRIMARY \[custom:.*\] -> ALLOW/);
-    assert.match(compareOut, /SHADOW  \[custom:.*\]/);
-    assert.match(compareOut, /VERDICT: AGREED/);
-  } finally {
-    server.close();
-  }
+      if (body.questions.directed) {
+        return {
+          ok: true,
+          json: async () => ({
+            answers: {
+              directed: { type: "noul", noul: isShadow ? 0.05 : 0.02 },
+              kind: { type: "choice", choice: "benign", confidence: 0.9 },
+            },
+          }),
+        };
+      }
+      if (body.questions.malicious) {
+        return {
+          ok: true,
+          json: async () => ({
+            answers: {
+              malicious: { type: "noul", noul: 0.01 },
+              kind: { type: "choice", choice: "clean", confidence: 0.9 },
+            },
+          }),
+        };
+      }
+      throw new Error("unexpected questions");
+    };
 
-  rmSync(dir, { recursive: true, force: true });
+    // assessAction runs with shadow and compare option
+    const actionRes = await assessAction({
+      tool: "bash",
+      input: { command: "git status" },
+      cwd: "/workspace",
+    }, { env, fetchImpl: fakeFetch, compare: true });
+
+    assert.equal(actionRes.level, "allow");
+    assert.ok(actionRes.eval);
+    assert.equal(actionRes.eval.agreed, true);
+    assert.equal(actionRes.eval.shadow.model, "inception/mercury-decide:free");
+
+    // scanContent runs with shadow
+    const contentRes = await scanContent({
+      text: "This is a clean document with more than two hundred characters. ".repeat(4),
+      tool: "view_file",
+    }, { env, fetchImpl: fakeFetch });
+    assert.equal(contentRes.flagged, false);
+
+    // scanInstructions runs with shadow
+    const instrRes = await scanInstructions({
+      text: "This is a clean skill instruction file with more than two hundred characters. ".repeat(4),
+      source: "SKILL.md",
+    }, { env, fetchImpl: fakeFetch });
+    assert.equal(instrRes.flagged, false);
+
+    // Verify all 3 methods dispatched requests to both primary and shadow models
+    const shadowCalls = fetchCalls.filter((c) => c.model === "inception/mercury-decide:free");
+    assert.equal(shadowCalls.length, 3);
+
+    const loggedRecords = readEvalRecords(evalFile);
+    assert.equal(loggedRecords.length, 3);
+    assert.equal(loggedRecords[0].event, "action");
+    assert.equal(loggedRecords[1].event, "content");
+    assert.equal(loggedRecords[2].event, "instruction");
+
+    // CLI tests for shadow and eval-report (using environment isolated from user's shell)
+    const cli = resolve("src/cli.js");
+    const cleanEnv = { ...process.env };
+    delete cleanEnv.JEV_MODEL;
+    delete cleanEnv.JEV_BACKEND;
+    delete cleanEnv.JEV_SHADOW_MODEL;
+    delete cleanEnv.JEV_SHADOW_BACKEND;
+    delete cleanEnv.JEV_GUARD_CONFIG;
+    delete cleanEnv.JEV_BASE_URL;
+
+    const runCli = (args, extraEnv = {}) =>
+      execFileSync(process.execPath, [cli, ...args], {
+        env: { ...cleanEnv, ...env, ...extraEnv },
+        encoding: "utf8",
+      });
+
+    // view shadow status (enabled)
+    const shadowStatus = runCli(["shadow"]);
+    assert.match(shadowStatus, /Shadow evaluation: enabled/);
+    assert.match(shadowStatus, /inception\/mercury-decide:free/);
+
+    // shadow reset / off
+    const shadowOff = runCli(["shadow", "off"]);
+    assert.match(shadowOff, /shadow evaluation disabled/);
+    const shadowDisabled = runCli(["shadow"]);
+    assert.match(shadowDisabled, /Shadow evaluation: disabled/);
+
+    // shadow set
+    const shadowSet = runCli(["shadow", "qwen/qwen3-coder"]);
+    assert.match(shadowSet, /shadow evaluation set to qwen\/qwen3-coder/);
+
+    // shadow set with invalid backend rejected
+    assert.throws(
+      () => runCli(["shadow", "qwen/qwen3-coder", "invalid-backend"]),
+      /unknown backend: invalid-backend/
+    );
+
+    // eval-report
+    const reportOut = runCli(["eval-report"]);
+    assert.match(reportOut, /jev-guard shadow evaluation report/);
+    assert.match(reportOut, /Total evaluated: 3 calls/);
+    assert.match(reportOut, /Agreement rate:  100%/);
+
+    // eval-report --json
+    const reportJson = JSON.parse(runCli(["eval-report", "--json"]));
+    assert.equal(reportJson.total, 3);
+    assert.equal(reportJson.agreementRate, 100);
+
+    // check with --compare via local test server
+    const { createServer } = await import("node:http");
+    const server = createServer((req, res) => {
+      let body = "";
+      req.on("data", (chunk) => { body += chunk; });
+      req.on("end", () => {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({
+          answers: {
+            risk: { type: "score", score: 0.0, confidence: 0.9 },
+            approval: { type: "noul", noul: 0.0 },
+          },
+        }));
+      });
+    });
+    await new Promise((res) => server.listen(0, "127.0.0.1", res));
+    const port = server.address().port;
+    try {
+      const { stdout: compareOut } = await execFileAsync(
+        process.execPath,
+        [cli, "check", "bash", '{"command":"echo 1"}', "--compare"],
+        {
+          env: {
+            ...cleanEnv,
+            ...env,
+            JEV_BASE_URL: `http://127.0.0.1:${port}`,
+            JEV_SHADOW_BACKEND: "custom",
+            JEV_SHADOW_MODEL: "test-shadow-model",
+          },
+          encoding: "utf8",
+        }
+      );
+      assert.match(compareOut, /PRIMARY \[custom:.*\] -> ALLOW/);
+      assert.match(compareOut, /SHADOW  \[custom:.*\]/);
+      assert.match(compareOut, /VERDICT: AGREED/);
+    } finally {
+      server.close();
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

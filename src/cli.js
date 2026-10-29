@@ -34,8 +34,13 @@ from OPENROUTER_API_KEY. JEV_BASE_URL points at any other System One server (e.g
 
 switch (cmd) {
   case "hook": {
-    const { main } = await import("./hook.js");
-    await main(rest);
+    try {
+      const { main } = await import("./hook.js");
+      await main(rest);
+    } catch (err) {
+      console.error(`jev-guard: hook failed (${err.message}); failing open`);
+      process.exit(0);
+    }
     break;
   }
   case "acp": {
@@ -225,7 +230,11 @@ switch (cmd) {
         if (!/^[a-zA-Z0-9_.-]+(\/[a-zA-Z0-9_.-]+)*(:[a-zA-Z0-9_.-]+)?$/.test(target) || target.includes("..")) {
           die(`invalid model ID: ${target}`);
         }
+        const allowed = ["typesafe", "openrouter", "gateway", "custom"];
         let shadowBackend = rest[1]?.toLowerCase();
+        if (shadowBackend && !allowed.includes(shadowBackend)) {
+          die(`unknown backend: ${rest[1]} (expected one of: ${allowed.join(", ")})`);
+        }
         if (!shadowBackend) {
           shadowBackend = target.includes("/") ? "openrouter" : "typesafe";
         }
@@ -240,7 +249,10 @@ switch (cmd) {
       break;
     }
     const cfg = readConfig();
-    const shadow = resolveShadow(cfg, process.env);
+    let shadow = null;
+    try {
+      shadow = resolveShadow(cfg, process.env);
+    } catch {}
     if (shadow) {
       const source = process.env.JEV_SHADOW_MODEL ? "env JEV_SHADOW_MODEL" : "config.json";
       console.log(`Shadow evaluation: enabled (${source})`);

@@ -2,7 +2,8 @@
 // Compares primary model decisions against a shadow model concurrently,
 // logging telemetry to ~/.jev-guard/eval.jsonl without blocking or failing guard decisions.
 
-import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { appendFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { ask, backend, DEFAULT_MODEL, readConfig, resolveBackend } from "./jev.js";
@@ -11,6 +12,23 @@ export const EVAL_FILE = join(homedir(), ".jev-guard", "eval.jsonl");
 
 /** Returns the path to eval.jsonl, honoring the JEV_GUARD_EVAL_FILE environment override if present. */
 export const evalConfigFile = (env = process.env) => env.JEV_GUARD_EVAL_FILE ?? EVAL_FILE;
+
+/**
+ * Redacts common sensitive patterns (API keys, bearer tokens, passwords) from preview strings.
+ * @param {string} text - Raw preview string
+ * @returns {string} Sanitized string
+ */
+export function redactSecrets(text) {
+  if (!text || typeof text !== "string") return "";
+  return text
+    .replace(/(Bearer\s+)[A-Za-z0-9_.-]+/gi, "$1[REDACTED]")
+    .replace(/(vck_[A-Za-z0-9_.-]{10,}|sk-or-[A-Za-z0-9_.-]{10,}|sk-[A-Za-z0-9_.-]{20,})/g, "[REDACTED_KEY]")
+    .replace(/(?:password|secret|passwd|token|apiKey|api_key)\s*[:=]\s*["']?[^"'\s,;]+["']?/gi, (match) => {
+      const idx = match.search(/[:=]/);
+      return match.slice(0, idx + 1) + " [REDACTED]";
+    })
+    .replace(/-----BEGIN [A-Z ]+ PRIVATE KEY-----[\s\S]*?-----END [A-Z ]+ PRIVATE KEY-----/g, "[REDACTED_PRIVATE_KEY]");
+}
 
 /**
  * Resolves the shadow model and backend configuration from config and environment.
@@ -76,28 +94,62 @@ export async function runParallelAsk(state, questions, opts = {}, shadowConfig =
     } catch {}
   }
 
+  const shadowTimeoutMs = opts.shadowTimeoutMs ?? +(env.JEV_GUARD_SHADOW_TIMEOUT_MS || 4_000);
+  const shadowAbort = new AbortController();
+  const shadowSignal = opts.signal ? AbortSignal.any([opts.signal, shadowAbort.signal]) : shadowAbort.signal;
+
   const shadowTask = shadow
     ? timed(() => {
         if (!shadowBackendObj) {
           throw new Error(`no credentials configured for shadow backend "${shadow.backend}"`);
         }
-        const shadowTimeoutMs = opts.shadowTimeoutMs ?? +(env.JEV_GUARD_SHADOW_TIMEOUT_MS || 4_000);
         return ask(state, questions, {
           ...opts,
           backend: shadowBackendObj,
           model: shadow.model,
           timeoutMs: shadowTimeoutMs,
+          signal: shadowSignal,
         });
       })
     : null;
 
-  const [primaryRes, shadowRes] = await Promise.all([
-    primaryTask,
-    shadowTask ? shadowTask : Promise.resolve(null),
-  ]);
+  if (opts.compare) {
+    const [primaryRes, shadowRes] = await Promise.all([
+      primaryTask,
+      shadowTask ? shadowTask : Promise.resolve(null),
+    ]);
+    if (primaryRes.error) throw primaryRes.error;
+    return {
+      primary: primaryRes.result,
+      primaryLatencyMs: primaryRes.latencyMs,
+      primaryBackend: primaryKind,
+      primaryModel,
+      shadow: shadowRes?.result,
+      shadowLatencyMs: shadowRes?.latencyMs,
+      shadowError: shadowRes?.error?.message,
+      shadowBackend: shadow?.backend,
+      shadowModel: shadow?.model,
+    };
+  }
 
+  // Hook / standard mode: primary settles first so verdicts are never delayed by shadow timeouts.
+  const primaryRes = await primaryTask;
   if (primaryRes.error) {
+    shadowAbort.abort();
     throw primaryRes.error;
+  }
+
+  let shadowRes = null;
+  if (shadowTask) {
+    const remainingMs = Math.max(500, shadowTimeoutMs - primaryRes.latencyMs);
+    const graceMs = opts.shadowGraceMs ?? +(env.JEV_GUARD_SHADOW_GRACE_MS || remainingMs);
+    const graceTimeout = new Promise((res) =>
+      setTimeout(() => res({ error: new Error("shadow timeout (grace period exceeded)"), latencyMs: shadowTimeoutMs }), graceMs)
+    );
+    shadowRes = await Promise.race([shadowTask, graceTimeout]);
+    if (shadowRes.error && shadowRes.error.message.includes("grace period")) {
+      shadowAbort.abort();
+    }
   }
 
   return {
@@ -115,16 +167,21 @@ export async function runParallelAsk(state, questions, opts = {}, shadowConfig =
 
 /**
  * Safely appends an evaluation record to the eval.jsonl telemetry log file.
- * Non-blocking and never throws.
+ * Non-blocking, sanitized, and never throws.
  * @param {Object} record - Evaluation telemetry record
  * @param {NodeJS.ProcessEnv} [env=process.env] - Environment variables object
  */
-export function logEvalRecord(record, env = process.env) {
+export async function logEvalRecord(record, env = process.env) {
   try {
     const file = evalConfigFile(env);
     mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
-    const line = JSON.stringify({ timestamp: Date.now(), ...record }) + "\n";
-    appendFileSync(file, line, { mode: 0o600 });
+    const sanitized = {
+      timestamp: Date.now(),
+      ...record,
+      preview: record.preview ? redactSecrets(record.preview) : undefined,
+    };
+    const line = JSON.stringify(sanitized) + "\n";
+    await appendFile(file, line, { mode: 0o600 });
   } catch (err) {
     if (process.env.DEBUG) {
       console.warn(`jev-guard: failed to log eval record: ${err.message}`);
@@ -133,20 +190,20 @@ export function logEvalRecord(record, env = process.env) {
 }
 
 /**
- * Reads and parses evaluation records from a JSONL file.
+ * Reads and parses evaluation records from a JSONL file, bounded to the most recent records.
  * @param {string} [file] - Path to jsonl file
  * @param {NodeJS.ProcessEnv} [env=process.env] - Environment variables object
+ * @param {number} [maxRecords=10000] - Maximum records to load
  * @returns {Array<Object>} Parsed evaluation records
  */
-export function readEvalRecords(file, env = process.env) {
+export function readEvalRecords(file, env = process.env, maxRecords = 10_000) {
   const filePath = file ?? evalConfigFile(env);
   if (!existsSync(filePath)) return [];
   try {
     const content = readFileSync(filePath, "utf8");
-    return content
-      .split("\n")
-      .map((line) => line.trim())
-      .filter(Boolean)
+    const lines = content.split("\n").map((line) => line.trim()).filter(Boolean);
+    const slice = lines.length > maxRecords ? lines.slice(-maxRecords) : lines;
+    return slice
       .map((line) => {
         try {
           return JSON.parse(line);
@@ -161,16 +218,22 @@ export function readEvalRecords(file, env = process.env) {
 }
 
 /**
- * Computes statistical percentiles (p50, p90, p95) from an array of numbers.
+ * Computes statistical percentiles (p50, p90, p95) from an array of numbers using linear interpolation.
  * @param {number[]} values - Array of numeric measurements
  * @returns {{p50: number, p90: number, p95: number, avg: number}}
  */
 function percentiles(values) {
   if (!values.length) return { p50: 0, p90: 0, p95: 0, avg: 0 };
   const sorted = [...values].sort((a, b) => a - b);
-  const pick = (pct) => sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * pct))];
+  const interpolate = (pct) => {
+    const rank = (sorted.length - 1) * pct;
+    const lower = Math.floor(rank);
+    const upper = Math.ceil(rank);
+    const weight = rank - lower;
+    return Math.round(sorted[lower] * (1 - weight) + sorted[upper] * weight);
+  };
   const avg = Math.round(sorted.reduce((acc, v) => acc + v, 0) / sorted.length);
-  return { p50: pick(0.5), p90: pick(0.9), p95: pick(0.95), avg };
+  return { p50: interpolate(0.5), p90: interpolate(0.9), p95: interpolate(0.95), avg };
 }
 
 /**
