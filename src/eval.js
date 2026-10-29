@@ -143,10 +143,15 @@ export async function runParallelAsk(state, questions, opts = {}, shadowConfig =
   if (shadowTask) {
     const remainingMs = Math.max(500, shadowTimeoutMs - primaryRes.latencyMs);
     const graceMs = opts.shadowGraceMs ?? +(env.JEV_GUARD_SHADOW_GRACE_MS || remainingMs);
-    const graceTimeout = new Promise((res) =>
-      setTimeout(() => res({ error: new Error("shadow timeout (grace period exceeded)"), latencyMs: shadowTimeoutMs }), graceMs)
-    );
-    shadowRes = await Promise.race([shadowTask, graceTimeout]);
+    let timer;
+    const graceTimeout = new Promise((res) => {
+      timer = setTimeout(() => res({ error: new Error("shadow timeout (grace period exceeded)"), latencyMs: shadowTimeoutMs }), graceMs);
+    });
+    try {
+      shadowRes = await Promise.race([shadowTask, graceTimeout]);
+    } finally {
+      clearTimeout(timer);
+    }
     if (shadowRes.error && shadowRes.error.message.includes("grace period")) {
       shadowAbort.abort();
     }
@@ -197,6 +202,7 @@ export async function logEvalRecord(record, env = process.env) {
  * @returns {Array<Object>} Parsed evaluation records
  */
 export function readEvalRecords(file, env = process.env, maxRecords = 10_000) {
+  if (typeof maxRecords === "number" && maxRecords <= 0) return [];
   const filePath = file ?? evalConfigFile(env);
   if (!existsSync(filePath)) return [];
   try {

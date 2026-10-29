@@ -40,7 +40,9 @@ export async function scanInstructionsCached({ text, source }, opts = {}) {
   const t = thresholds(env);
   const { resolveShadow } = await import("./eval.js");
   const { readConfig } = await import("./jev.js");
-  const shadow = opts.shadow ?? resolveShadow(readConfig(env), env);
+  const rawCfg = readConfig(env);
+  const cfg = (rawCfg && typeof rawCfg === "object" && !Array.isArray(rawCfg)) ? rawCfg : {};
+  const shadow = opts.shadow ?? resolveShadow(cfg, env);
   const key = createHash("sha1").update(text).digest("hex");
   const hit = !shadow ? readCache()[key] : null;
   if (hit) {

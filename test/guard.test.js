@@ -904,16 +904,13 @@ test("shadow integration: assessAction, scanContent, and scanInstructions with C
     assert.equal(loggedRecords[0].event, "action");
     assert.equal(loggedRecords[1].event, "content");
     assert.equal(loggedRecords[2].event, "instruction");
+    assert.deepEqual(readEvalRecords(evalFile, env, 0), []);
 
-    // CLI tests for shadow and eval-report (using environment isolated from user's shell)
+    // CLI tests for shadow and eval-report (using environment completely isolated from user's shell)
     const cli = resolve("src/cli.js");
-    const cleanEnv = { ...process.env };
-    delete cleanEnv.JEV_MODEL;
-    delete cleanEnv.JEV_BACKEND;
-    delete cleanEnv.JEV_SHADOW_MODEL;
-    delete cleanEnv.JEV_SHADOW_BACKEND;
-    delete cleanEnv.JEV_GUARD_CONFIG;
-    delete cleanEnv.JEV_BASE_URL;
+    const cleanEnv = Object.fromEntries(
+      Object.entries(process.env).filter(([k]) => !k.startsWith("JEV_"))
+    );
 
     const runCli = (args, extraEnv = {}) =>
       execFileSync(process.execPath, [cli, ...args], {
