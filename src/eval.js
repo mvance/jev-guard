@@ -2,8 +2,8 @@
 // Compares primary model decisions against a shadow model concurrently,
 // logging telemetry to ~/.jev-guard/eval.jsonl without blocking or failing guard decisions.
 
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
-import { appendFile } from "node:fs/promises";
+import { existsSync, readFileSync } from "node:fs";
+import { appendFile, mkdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { ask, backend, DEFAULT_MODEL, readConfig, resolveBackend } from "./jev.js";
@@ -184,7 +184,7 @@ export async function runParallelAsk(state, questions, opts = {}, shadowConfig =
 export async function logEvalRecord(record, env = process.env) {
   try {
     const file = evalConfigFile(env);
-    mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
+    await mkdir(dirname(file), { recursive: true, mode: 0o700 });
     const sanitized = {
       timestamp: Date.now(),
       ...record,

@@ -8,6 +8,8 @@ import { fileURLToPath } from "node:url";
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const [cmd, ...rest] = process.argv.slice(2);
 
+// Model slug format: [org/]model[:variant] allowing alphanumeric, hyphens, underscores, dots;
+// disallowing leading/trailing symbols in segments and directory traversal (..)
 const MODEL_SEGMENT = "[a-zA-Z0-9](?:(?:[a-zA-Z0-9_-]|\\.(?!\\.))*[a-zA-Z0-9])?";
 const MODEL_ID_REGEX = new RegExp(`^${MODEL_SEGMENT}(?:\\/${MODEL_SEGMENT})*(?::${MODEL_SEGMENT})?$`);
 
@@ -42,7 +44,8 @@ switch (cmd) {
       await main(rest);
     } catch (err) {
       if (process.env.JEV_GUARD_FAIL_CLOSED) {
-        console.error(`jev-guard: hook failed (${err.message}); failing closed`);
+        // Exit code 2 signals a tool denial to coding agent hook harnesses (e.g. Claude Code, Cursor)
+        console.error(`jev-guard: hook failed (${err.message}); failing closed (exit 2)`);
         process.exit(2);
       } else {
         console.error(`jev-guard: hook failed (${err.message}); failing open`);
